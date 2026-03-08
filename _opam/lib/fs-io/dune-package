@@ -1,0 +1,34 @@
+(lang dune 3.21)
+(name fs-io)
+(version 3.21.1)
+(sections (lib .) (libexec .) (doc ../../doc/fs-io))
+(files
+ (lib
+  (META
+   dune-package
+   fs_io.a
+   fs_io.cma
+   fs_io.cmi
+   fs_io.cmt
+   fs_io.cmti
+   fs_io.cmx
+   fs_io.cmxa
+   fs_io.ml
+   fs_io.mli
+   opam))
+ (libexec (fs_io.cmxs))
+ (doc (CHANGES.md LICENSE.md README.md)))
+(library
+ (name fs-io)
+ (kind normal)
+ (archives (byte fs_io.cma) (native fs_io.cmxa))
+ (plugins (byte fs_io.cma) (native fs_io.cmxs))
+ (native_archives fs_io.a)
+ (requires unix)
+ (main_module_name Fs_io)
+ (modes byte native)
+ (modules
+  (singleton
+   (obj_name fs_io)
+   (visibility public)
+   (source (path Fs_io) (intf (path fs_io.mli)) (impl (path fs_io.ml))))))

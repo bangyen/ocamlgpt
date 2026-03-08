@@ -1,0 +1,3 @@
+(library
+ (name microgpt)
+ (public_name ocamlgpt.lib))

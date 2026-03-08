@@ -1,0 +1,21 @@
+opam-version: "2.0"
+lib: [
+  "_build/install/default/lib/fs-io/META"
+  "_build/install/default/lib/fs-io/dune-package"
+  "_build/install/default/lib/fs-io/fs_io.a"
+  "_build/install/default/lib/fs-io/fs_io.cma"
+  "_build/install/default/lib/fs-io/fs_io.cmi"
+  "_build/install/default/lib/fs-io/fs_io.cmt"
+  "_build/install/default/lib/fs-io/fs_io.cmti"
+  "_build/install/default/lib/fs-io/fs_io.cmx"
+  "_build/install/default/lib/fs-io/fs_io.cmxa"
+  "_build/install/default/lib/fs-io/fs_io.ml"
+  "_build/install/default/lib/fs-io/fs_io.mli"
+  "_build/install/default/lib/fs-io/opam"
+]
+doc: [
+  "_build/install/default/doc/fs-io/CHANGES.md"
+  "_build/install/default/doc/fs-io/LICENSE.md"
+  "_build/install/default/doc/fs-io/README.md"
+]
+libexec: "_build/install/default/lib/fs-io/fs_io.cmxs"

@@ -1,0 +1,36 @@
+# dune runtest
+# OCAMLPARAM: unset
+# Shared cache: enabled-except-user-rules
+# Shared cache location: /Users/bangyen/.cache/dune/db
+# Workspace root: /Users/bangyen/Documents/repos/ocamlgpt
+# Auto-detected concurrency: 10
+# Dune context:
+#  { name = "default"
+#  ; kind = "default"
+#  ; profile = Dev
+#  ; merlin = true
+#  ; fdo_target_exe = None
+#  ; build_dir = In_build_dir "default"
+#  ; instrument_with = []
+#  }
+$ /Users/bangyen/Documents/repos/ocamlgpt/_opam/bin/ocamlc.opt -config > /var/folders/8d/hscvsgg16n398l8ldqfdwccw0000gn/T/dune_0c975d_output
+$ (cd _build/default/test_suite && ./test_suite.exe)
+> --- Testing Autograd Basic Operations ---
+> PASS: h.data
+> Final h.data: 6.417209
+> Gradients: a.grad=0.000000, b.grad=0.000000
+>
+> --- Testing ReLU ---
+> PASS: relu(-5) data
+> PASS: relu(-5) grad
+> PASS: relu(5) data
+> PASS: relu(5) grad
+>
+> --- Testing Softmax ---
+> PASS: softmax total prob
+> Softmax output: [0.244728471055, 0.665240955775, 0.0900305731704]
+>
+> --- Testing RMSNorm ---
+> PASS: rmsnorm output ms
+>
+> All tests passed!

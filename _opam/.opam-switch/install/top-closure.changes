@@ -1,0 +1,29 @@
+opam-version: "2.0"
+added: [
+  "doc/top-closure" {"D"}
+  "doc/top-closure/CHANGES.md" {"F:S192692T1773006702.46"}
+  "doc/top-closure/LICENSE.md" {"F:S1111T1773006702.46"}
+  "doc/top-closure/README.md" {"F:S5829T1773006702.46"}
+  "lib/top-closure" {"D"}
+  "lib/top-closure/META" {"F:S189T1773006702.45"}
+  "lib/top-closure/dune-package" {"F:S1352T1773006702.45"}
+  "lib/top-closure/opam" {"F:S803T1773006702.45"}
+  "lib/top-closure/s.ml" {"F:S557T1773006702.45"}
+  "lib/top-closure/top_closure.a" {"F:S11784T1773006702.46"}
+  "lib/top-closure/top_closure.cma" {"F:S15315T1773006702.46"}
+  "lib/top-closure/top_closure.cmi" {"F:S2087T1773006702.46"}
+  "lib/top-closure/top_closure.cmt" {"F:S16979T1773006702.46"}
+  "lib/top-closure/top_closure.cmti" {"F:S8447T1773006702.46"}
+  "lib/top-closure/top_closure.cmx" {"F:S496T1773006702.46"}
+  "lib/top-closure/top_closure.cmxa" {"F:S698T1773006702.46"}
+  "lib/top-closure/top_closure.cmxs" {"F:S53376T1773006702.46"}
+  "lib/top-closure/top_closure.ml" {"F:S1265T1773006702.46"}
+  "lib/top-closure/top_closure.mli" {"F:S142T1773006702.46"}
+  "lib/top-closure/top_closure__.cmi" {"F:S406T1773006702.46"}
+  "lib/top-closure/top_closure__.cmt" {"F:S3083T1773006702.46"}
+  "lib/top-closure/top_closure__.cmx" {"F:S149T1773006702.46"}
+  "lib/top-closure/top_closure__.ml" {"F:S159T1773006702.46"}
+  "lib/top-closure/top_closure__S.cmi" {"F:S1681T1773006702.46"}
+  "lib/top-closure/top_closure__S.cmt" {"F:S9518T1773006702.46"}
+  "lib/top-closure/top_closure__S.cmx" {"F:S211T1773006702.46"}
+]

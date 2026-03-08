@@ -1,0 +1,18 @@
+version = "3.21.1"
+description = "dune rpc client and protocol"
+requires = "csexp dune-rpc.private dyn ordering pp stdune top-closure xdg"
+exports = "dune-rpc.private"
+archive(byte) = "dune_rpc.cma"
+archive(native) = "dune_rpc.cmxa"
+plugin(byte) = "dune_rpc.cma"
+plugin(native) = "dune_rpc.cmxs"
+package "private" (
+  directory = "private"
+  version = "3.21.1"
+  description = "for internal use only"
+  requires = "csexp dyn ocamlc-loc ordering pp stdune top-closure unix xdg"
+  archive(byte) = "dune_rpc_private.cma"
+  archive(native) = "dune_rpc_private.cmxa"
+  plugin(byte) = "dune_rpc_private.cma"
+  plugin(native) = "dune_rpc_private.cmxs"
+)

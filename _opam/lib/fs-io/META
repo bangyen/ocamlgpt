@@ -1,0 +1,7 @@
+version = "3.21.1"
+description = ""
+requires = "unix"
+archive(byte) = "fs_io.cma"
+archive(native) = "fs_io.cmxa"
+plugin(byte) = "fs_io.cma"
+plugin(native) = "fs_io.cmxs"

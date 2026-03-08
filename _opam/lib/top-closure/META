@@ -1,0 +1,7 @@
+version = "3.21.1"
+description = ""
+requires = ""
+archive(byte) = "top_closure.cma"
+archive(native) = "top_closure.cmxa"
+plugin(byte) = "top_closure.cma"
+plugin(native) = "top_closure.cmxs"
