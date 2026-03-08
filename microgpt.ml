@@ -159,7 +159,8 @@ let gpt state token_id pos_id keys values =
   linear x_final state.lm_head
 
 (* --- Main Execution --- *)
-let () =
+
+let main () =
   let open Value in
   Random.self_init ();
   (* 1. Load Data (Minimalist) *)
@@ -198,19 +199,19 @@ let () =
     );
   } in
 
-  let params = ref [] in
-  Array.iter (fun row -> Array.iter (fun p -> params := p :: !params) row) state.wte;
-  Array.iter (fun row -> Array.iter (fun p -> params := p :: !params) row) state.wpe;
-  Array.iter (fun row -> Array.iter (fun p -> params := p :: !params) row) state.lm_head;
+  let params_list = ref [] in
+  Array.iter (fun row -> Array.iter (fun p -> params_list := p :: !params_list) row) state.wte;
+  Array.iter (fun row -> Array.iter (fun p -> params_list := p :: !params_list) row) state.wpe;
+  Array.iter (fun row -> Array.iter (fun p -> params_list := p :: !params_list) row) state.lm_head;
   Array.iter (fun layer ->
-    Hashtbl.iter (fun _ mat -> Array.iter (fun row -> Array.iter (fun p -> params := p :: !params) row) mat) layer
+    Hashtbl.iter (fun _ mat -> Array.iter (fun row -> Array.iter (fun p -> params_list := p :: !params_list) row) mat) layer
   ) state.layers;
-  let params = Array.of_list (List.rev !params) in
-  Printf.printf "num params: %d\n" (Array.length params);
+  let params_arr = Array.of_list (List.rev !params_list) in
+  Printf.printf "num params: %d\n" (Array.length params_arr);
 
   (* 3. Training Loop (Single doc for simplicity, loop for N steps) *)
-  let m = Array.make (Array.length params) 0.0 in
-  let v = Array.make (Array.length params) 0.0 in
+  let m = Array.make (Array.length params_arr) 0.0 in
+  let v = Array.make (Array.length params_arr) 0.0 in
 
   for step = 1 to num_steps do
     let doc = List.nth docs (Random.int (List.length docs)) in
@@ -248,7 +249,7 @@ let () =
       let v_hat = v.(i) /. (1.0 -. (beta2 ** float_of_int step)) in
       p.data <- p.data -. lr_t *. m_hat /. (sqrt v_hat +. eps_adam);
       p.grad <- 0.0
-    ) params;
+    ) params_arr;
 
     if step mod 10 = 0 || step = 1 then
       Printf.printf "step %4d / %d | loss %.4f\n%!" step num_steps avg_loss.data
@@ -281,3 +282,7 @@ let () =
     let name = String.of_seq (List.to_seq !sample) in
     Printf.printf "sample %2d: %s\n" sample_idx name
   done
+
+let () =
+  if Array.length Sys.argv > 0 && (Filename.basename Sys.argv.(0) = "microgpt.ml" || Filename.basename Sys.argv.(0) = "microgpt") then
+    main ()
