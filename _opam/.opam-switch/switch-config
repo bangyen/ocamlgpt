@@ -1,0 +1,13 @@
+opam-version: "2.0"
+synopsis: "ocaml-base-compiler = 5.0.0"
+opam-root: "/Users/bangyen/.opam"
+invariant: [
+  "ocaml-base-compiler" {= "5.0.0"}
+]
+paths {
+  
+}
+variables {
+  user: "bangyen"
+  group: "staff"
+}

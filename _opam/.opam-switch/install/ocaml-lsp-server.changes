@@ -1,0 +1,12 @@
+opam-version: "2.0"
+added: [
+  "bin/ocamllsp" {"F:S18047640T1773006740.21"}
+  "doc/ocaml-lsp-server" {"D"}
+  "doc/ocaml-lsp-server/CHANGES.md" {"F:S16069T1773006740.22"}
+  "doc/ocaml-lsp-server/LICENSE.md" {"F:S818T1773006740.22"}
+  "doc/ocaml-lsp-server/README.md" {"F:S15123T1773006740.22"}
+  "lib/ocaml-lsp-server" {"D"}
+  "lib/ocaml-lsp-server/META" {"F:S0T1773006740.22"}
+  "lib/ocaml-lsp-server/dune-package" {"F:S225T1773006740.22"}
+  "lib/ocaml-lsp-server/opam" {"F:S1520T1773006740.22"}
+]

@@ -1,0 +1,9 @@
+package "lib" (
+  directory = "lib"
+  description = ""
+  requires = ""
+  archive(byte) = "microgpt.cma"
+  archive(native) = "microgpt.cmxa"
+  plugin(byte) = "microgpt.cma"
+  plugin(native) = "microgpt.cmxs"
+)

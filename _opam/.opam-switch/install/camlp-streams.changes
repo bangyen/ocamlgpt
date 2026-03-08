@@ -1,0 +1,27 @@
+opam-version: "2.0"
+added: [
+  "doc/camlp-streams" {"D"}
+  "doc/camlp-streams/CHANGES.md" {"F:S430T1773006702.82"}
+  "doc/camlp-streams/LICENSE" {"F:S27214T1773006702.82"}
+  "doc/camlp-streams/README.md" {"F:S1121T1773006702.82"}
+  "lib/camlp-streams" {"D"}
+  "lib/camlp-streams/META" {"F:S178T1773006702.81"}
+  "lib/camlp-streams/camlp_streams.a" {"F:S58104T1773006702.81"}
+  "lib/camlp-streams/camlp_streams.cma" {"F:S75025T1773006702.81"}
+  "lib/camlp-streams/camlp_streams.cmxa" {"F:S1232T1773006702.81"}
+  "lib/camlp-streams/camlp_streams.cmxs" {"F:S76624T1773006702.82"}
+  "lib/camlp-streams/dune-package" {"F:S972T1773006702.81"}
+  "lib/camlp-streams/genlex.cmi" {"F:S839T1773006702.81"}
+  "lib/camlp-streams/genlex.cmt" {"F:S91567T1773006702.81"}
+  "lib/camlp-streams/genlex.cmti" {"F:S10678T1773006702.81"}
+  "lib/camlp-streams/genlex.cmx" {"F:S880T1773006702.81"}
+  "lib/camlp-streams/genlex.ml" {"F:S8139T1773006702.81"}
+  "lib/camlp-streams/genlex.mli" {"F:S3495T1773006702.81"}
+  "lib/camlp-streams/opam" {"F:S1719T1773006702.82"}
+  "lib/camlp-streams/stream.cmi" {"F:S2909T1773006702.82"}
+  "lib/camlp-streams/stream.cmt" {"F:S82960T1773006702.82"}
+  "lib/camlp-streams/stream.cmti" {"F:S20902T1773006702.82"}
+  "lib/camlp-streams/stream.cmx" {"F:S2236T1773006702.82"}
+  "lib/camlp-streams/stream.ml" {"F:S7070T1773006702.82"}
+  "lib/camlp-streams/stream.mli" {"F:S3857T1773006702.82"}
+]

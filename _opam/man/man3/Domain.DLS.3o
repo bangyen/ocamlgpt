@@ -1,0 +1,123 @@
+.TH "Domain.DLS" 3 2026-03-08 OCamldoc "OCaml library"
+.SH NAME
+Domain.DLS \- no description
+.SH Module
+Module   Domain.DLS
+.SH Documentation
+.sp
+Module
+.BI "DLS"
+ : 
+.B sig end
+
+.sp
+
+.sp
+
+.sp
+.sp
+
+.PP
+Domain\-local Storage
+.PP
+.I type 
+.B 'a
+.I key 
+
+.sp
+Type of a DLS key
+
+.sp
+
+.I val new_key 
+: 
+.B ?split_from_parent:('a -> 'a) -> (unit -> 'a) -> 'a key
+.sp
+
+.ft B
+new_key f
+.ft R
+returns a new key bound to initialiser 
+.ft B
+f
+.ft R
+for accessing
+domain\-local variables\&.
+.sp
+If 
+.ft B
+split_from_parent
+.ft R
+is provided, spawning a domain will derive the
+child value (for this key) from the parent value\&.
+.sp
+Note that the 
+.ft B
+split_from_parent
+.ft R
+call is computed in the parent
+domain, and is always computed regardless of whether the child domain
+will use it\&. If the splitting function is expensive or requires
+client\-side computation, consider using 
+.ft B
+\&'a Lazy\&.t key
+.ft R
+\&.
+
+.sp
+
+.I val get 
+: 
+.B 'a key -> 'a
+.sp
+
+.ft B
+get k
+.ft R
+returns 
+.ft B
+v
+.ft R
+if a value 
+.ft B
+v
+.ft R
+is associated to the key 
+.ft B
+k
+.ft R
+on
+the calling domain\&'s domain\-local state\&. Sets 
+.ft B
+k
+.ft R
+\&'s value with its
+initialiser and returns it otherwise\&.
+
+.sp
+
+.I val set 
+: 
+.B 'a key -> 'a -> unit
+.sp
+
+.ft B
+set k v
+.ft R
+updates the calling domain\&'s domain\-local state to associate
+the key 
+.ft B
+k
+.ft R
+with value 
+.ft B
+v
+.ft R
+\&. It overwrites any previous values associated
+to 
+.ft B
+k
+.ft R
+, which cannot be restored later\&.
+
+.sp

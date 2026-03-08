@@ -1,0 +1,58 @@
+(lang dune 3.21)
+(name top-closure)
+(version 3.21.1)
+(sections (lib .) (libexec .) (doc ../../doc/top-closure))
+(files
+ (lib
+  (META
+   dune-package
+   opam
+   s.ml
+   top_closure.a
+   top_closure.cma
+   top_closure.cmi
+   top_closure.cmt
+   top_closure.cmti
+   top_closure.cmx
+   top_closure.cmxa
+   top_closure.ml
+   top_closure.mli
+   top_closure__.cmi
+   top_closure__.cmt
+   top_closure__.cmx
+   top_closure__.ml
+   top_closure__S.cmi
+   top_closure__S.cmt
+   top_closure__S.cmx))
+ (libexec (top_closure.cmxs))
+ (doc (CHANGES.md LICENSE.md README.md)))
+(library
+ (name top-closure)
+ (kind normal)
+ (archives (byte top_closure.cma) (native top_closure.cmxa))
+ (plugins (byte top_closure.cma) (native top_closure.cmxs))
+ (native_archives top_closure.a)
+ (main_module_name Top_closure)
+ (modes byte native)
+ (modules
+  (wrapped
+   (group
+    (alias
+     (obj_name top_closure__)
+     (visibility public)
+     (kind alias)
+     (source (path Top_closure__) (impl (path top_closure__.ml-gen))))
+    (name Top_closure)
+    (modules
+     (module
+      (obj_name top_closure__S)
+      (visibility public)
+      (source (path S) (impl (path s.ml))))
+     (module
+      (obj_name top_closure)
+      (visibility public)
+      (source
+       (path Top_closure)
+       (intf (path top_closure.mli))
+       (impl (path top_closure.ml))))))
+   (wrapped true))))

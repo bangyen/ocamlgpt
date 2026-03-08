@@ -1,0 +1,10 @@
+version = "3.21.1"
+description =
+"Standard library of Dune.
+This library offers no backwards compatibility guarantees. Use at your own risk."
+requires = "csexp dyn fs-io ordering pp top-closure unix"
+exports = "dyn ordering pp top-closure"
+archive(byte) = "stdune.cma"
+archive(native) = "stdune.cmxa"
+plugin(byte) = "stdune.cma"
+plugin(native) = "stdune.cmxs"
