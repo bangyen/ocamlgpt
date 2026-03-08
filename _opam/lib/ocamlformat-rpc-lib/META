@@ -1,7 +1,0 @@
-version = "0.28.1"
-description = ""
-requires = "csexp"
-archive(byte) = "ocamlformat_rpc_lib.cma"
-archive(native) = "ocamlformat_rpc_lib.cmxa"
-plugin(byte) = "ocamlformat_rpc_lib.cma"
-plugin(native) = "ocamlformat_rpc_lib.cmxs"

@@ -1,7 +1,0 @@
-version = "3.21.1"
-description = ""
-requires = "dyn"
-archive(byte) = "ocamlc_loc.cma"
-archive(native) = "ocamlc_loc.cmxa"
-plugin(byte) = "ocamlc_loc.cma"
-plugin(native) = "ocamlc_loc.cmxs"
