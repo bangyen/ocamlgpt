@@ -164,15 +164,17 @@ let main () =
   let open Value in
   Random.self_init ();
   (* 1. Load Data (Minimalist) *)
+  if not (Sys.file_exists "input.txt") then begin
+    Printf.printf "input.txt not found, downloading...\n%!";
+    let _ = Sys.command "curl -s https://raw.githubusercontent.com/karpathy/makemore/988aa59/names.txt -o input.txt" in
+    ()
+  end;
   let docs =
-    if Sys.file_exists "input.txt" then
-      let ic = open_in "input.txt" in
-      let rec read_lines acc =
-        try let line = input_line ic in read_lines (if line <> "" then line :: acc else acc)
-        with End_of_file -> close_in ic; acc
-      in read_lines []
-    else
-        ["karpathy"; "microgpt"; "ocaml"; "ai"] (* Minimal fallback *)
+    let ic = open_in "input.txt" in
+    let rec read_lines acc =
+      try let line = input_line ic in read_lines (if line <> "" then line :: acc else acc)
+      with End_of_file -> close_in ic; acc
+    in read_lines []
   in
   let all_chars = List.fold_left (fun s doc -> s ^ doc) "" docs |> String.to_seq |> List.of_seq |> List.sort_uniq Char.compare in
   uchars := Array.of_list all_chars;
