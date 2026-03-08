@@ -1,6 +1,0 @@
-(library
- (name dune_trace)
- (foreign_stubs
-  (language c)
-  (names dune_trace_stubs))
- (libraries stdune chrome_trace spawn unix))

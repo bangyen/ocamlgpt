@@ -1,6 +1,0 @@
-(library
- (public_name fiber-lwt)
- (name fiber_lwt)
- (libraries stdune lwt fiber)
- (instrumentation
-  (backend bisect_ppx)))

@@ -1,4 +1,0 @@
-(rocq.theory
- (name A)
- (stdlib no)
- (theories Corelib))
