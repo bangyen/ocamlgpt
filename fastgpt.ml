@@ -264,7 +264,6 @@ module Tensor = struct
 
   let weighted_sum_into out weights values =
     (* weights: 1xT, values: list of 1xH tensors *)
-    let t = Array2.dim2 weights.data in
     let h = Array2.dim2 out.data in
     Array2.fill out.data 0.0;
     List.iteri (fun i v ->
@@ -593,12 +592,14 @@ let main () =
         for j = 0 to vocab_size - 1 do Tensor.set_entry logits 0 j (Tensor.entry logits 0 j /. 0.5) done;
         let probs = Tensor.softmax logits in
         let r = Random.float 1.0 in
-        let acc, next_id = ref 0.0, ref 0 in
+        let acc, next_id, found = ref 0.0, ref bos_token, ref false in
         for j = 0 to vocab_size - 1 do
-          acc := !acc +. Tensor.entry probs 0 j;
-          if r < !acc && !next_id = 0 then next_id := j
+          if not !found then (
+            acc := !acc +. Tensor.entry probs 0 j;
+            if r <= !acc then (next_id := j; found := true)
+          )
         done;
-        if !next_id = bos_token || !next_id = 0 then tokens else gen (tokens @ [!next_id]) keys values
+        if !next_id = bos_token then tokens else gen (tokens @ [!next_id]) keys values
     in
     let keys, values = Array.make n_layer [], Array.make n_layer [] in
     let tokens = gen [bos_token] keys values in
