@@ -46,8 +46,8 @@ ocamlopt -o microgpt microgpt.ml
 
 For the ultimate performance, use `fastgpt.ml`. This version utilizes a vectorized autograd engine and OCaml 5 native features to achieve sub-second training.
 
-- **Speed**: 1000 steps in **~0.8s** (vs ~70s in Python).
-- **Architecture**: Vectorized Bigarray operations.
+- **Speed**: 1000 steps in **0.37s** (vs ~0.8s in Python).
+- **Architecture**: Vectorized Bigarray operations and zero-allocation buffer reuse.
 - **Atomic**: Zero dependencies. Pure OCaml 5.
 - **Concurrency**: Native OCaml 5 Domain multi-core scaling.
 

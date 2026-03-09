@@ -6,11 +6,26 @@
    - Optimizer: Adam with linear learning rate decay.
 *)
 
-(* --- Autograd Engine --- *)
-module Value = struct
-  (* A node in the computational graph. 
-     _prev: parents of this node.
-     _op_grad: local partial derivatives with respect to each parent. *)
+module type ENGINE = sig
+  type t
+  val create : ?prev:t list -> ?op_grad:float list -> float -> t
+  val add : t -> t -> t
+  val sub : t -> t -> t
+  val mul : t -> t -> t
+  val div : t -> t -> t
+  val neg : t -> t
+  val pow : t -> float -> t
+  val exp : t -> t
+  val log : t -> t
+  val relu : t -> t
+  val backward : t -> unit
+  val data : t -> float
+  val grad : t -> float
+  val set_data : t -> float -> unit
+  val set_grad : t -> float -> unit
+end
+
+module Value : ENGINE = struct
   type t = {
     mutable data : float;
     mutable grad : float;
@@ -22,7 +37,6 @@ module Value = struct
   let create ?(prev=[]) ?(op_grad=[]) data =
     { data; grad = 0.0; _prev = prev; _op_grad = op_grad; _visited = false }
 
-  (* Core Operations: define the forward value and the local gradient. *)
   let add a b = create ~prev:[a; b] ~op_grad:[1.0; 1.0] (a.data +. b.data)
   let mul a b = create ~prev:[a; b] ~op_grad:[b.data; a.data] (a.data *. b.data)
   let pow v n = create ~prev:[v] ~op_grad:[n *. (v.data ** (n -. 1.0))] (v.data ** n)
@@ -30,12 +44,10 @@ module Value = struct
   let exp v   = let e = exp v.data in create ~prev:[v] ~op_grad:[e] e
   let relu v  = create ~prev:[v] ~op_grad:[if v.data > 0.0 then 1.0 else 0.0] (max 0.0 v.data)
 
-  (* Derived Operations: built from core primitives. *)
   let neg v   = mul v (create (-1.0))
   let sub a b = add a (neg b)
   let div a b = mul a (pow b (-1.0))
 
-  (* Reverse-mode Autograd: topological sort + gradient accumulation. *)
   let backward root =
     let topo = ref [] in
     let rec build v =
@@ -43,10 +55,15 @@ module Value = struct
     in
     build root;
     root.grad <- 1.0;
-    List.fold_left (fun () v ->
+    List.iter (fun v ->
       List.iter2 (fun child og -> child.grad <- child.grad +. (og *. v.grad)) v._prev v._op_grad;
-      v._visited <- false (* Reset for next step *)
-    ) () !topo
+      v._visited <- false
+    ) !topo
+
+  let data v = v.data
+  let grad v = v.grad
+  let set_data v d = v.data <- d
+  let set_grad v g = v.grad <- g
 end
 
 let ( +: ), ( -: ), ( *: ), ( /: ) = Value.add, Value.sub, Value.mul, Value.div
@@ -94,31 +111,27 @@ let gauss mean std =
 let matrix rows cols std =
   Array.init rows (fun _ -> Array.init cols (fun _ -> Value.create (gauss 0.0 std)))
 
-(* Linear Layer: y = xW^T (no bias, as per microgpt.py) *)
+(* Linear Layer: y = xW^T *)
 let linear x w =
-  Array.map (fun row ->
+  w |> Array.map (fun row ->
     let acc = ref (Value.create 0.0) in
     for i = 0 to Array.length x - 1 do acc := !acc +: (x.(i) *: row.(i)) done;
     !acc
-  ) w
+  )
 
-(* Softmax: exp(xi) / sum(exp(xj)). Log-sum-exp trick used for stability. *)
+(* Softmax: exp(xi) / sum(exp(xj)) *)
 let softmax logits =
-  let max_val = ref (-. infinity) in
-  Array.iter (fun (v:Value.t) -> if v.data > !max_val then max_val := v.data) logits;
-  let exps = Array.map (fun v -> Value.exp (v -: Value.create !max_val)) logits in
-  let total = ref (Value.create 0.0) in
-  Array.iter (fun e -> total := !total +: e) exps;
-  Array.map (fun e -> e /: !total) exps
+  let max_val = Array.fold_left (fun m (v:Value.t) -> max m (Value.data v)) (-. infinity) logits in
+  let exps = logits |> Array.map (fun v -> Value.exp (v -: Value.create max_val)) in
+  let total = Array.fold_left (+:) (Value.create 0.0) exps in
+  exps |> Array.map (fun e -> e /: total)
 
-(* RMSNorm: x / sqrt(mean(x^2) + eps). A simplified LayerNorm. *)
+(* RMSNorm: x / sqrt(mean(x^2) + eps) *)
 let rmsnorm x =
   let n = float_of_int (Array.length x) in
-  let ms = ref (Value.create 0.0) in
-  Array.iter (fun xi -> ms := !ms +: (xi *: xi)) x;
-  let avg_ms = !ms /: Value.create n in
-  let scale = Value.pow (avg_ms +: Value.create 1e-5) (-0.5) in
-  Array.map (fun xi -> xi *: scale) x
+  let ms = Array.fold_left (fun acc xi -> acc +: (xi *: xi)) (Value.create 0.0) x in
+  let scale = (ms /: Value.create n) +: Value.create 1e-5 |> fun v -> Value.pow v (-0.5) in
+  x |> Array.map (fun xi -> xi *: scale)
 
 (* GPT Forward Pass: Multi-head attention + MLP residual blocks. *)
 let gpt state token_id pos_id keys values =
@@ -128,45 +141,42 @@ let gpt state token_id pos_id keys values =
     if li = n_layer then x
     else
       let l = state.layers.(li) in
-      (* 1) Multi-head Attention with Cache (keys/values lists) *)
-      let x_norm = rmsnorm x in
+      let x_norm = x |> rmsnorm in
       let q, k, v = linear x_norm l.wq, linear x_norm l.wk, linear x_norm l.wv in
       keys.(li) <- keys.(li) @ [k];
       values.(li) <- values.(li) @ [v];
 
-      let x_attn = Array.make n_embd (Value.create 0.0) in
-      for h = 0 to n_head - 1 do
+      let x_attn = Array.init n_embd (fun j ->
+        let h = j / head_dim in
+        let hj = j mod head_dim in
         let hs = h * head_dim in
         let q_h = Array.sub q hs head_dim in
         let k_h = List.map (fun ki -> Array.sub ki hs head_dim) keys.(li) in
         let v_h = List.map (fun vi -> Array.sub vi hs head_dim) values.(li) in
 
-        (* Attention scores: dot(q, k) / sqrt(dim) *)
-        let attn_logits = Array.of_list (List.map (fun (kh:Value.t array) ->
-          let acc = ref (Value.create 0.0) in
-          for i = 0 to head_dim - 1 do acc := !acc +: (q_h.(i) *: kh.(i)) done;
-          !acc /: Value.create (sqrt (float_of_int head_dim))
-        ) k_h) in
-        let attn_weights = softmax attn_logits in
+        let attn_weights = 
+          k_h |> List.map (fun kh ->
+            let acc = ref (Value.create 0.0) in
+            for i = 0 to head_dim - 1 do acc := !acc +: (q_h.(i) *: kh.(i)) done;
+            !acc /: Value.create (sqrt (float_of_int head_dim))
+          ) |> Array.of_list |> softmax
+        in
         
-        (* Weighted sum of values *)
-        for j = 0 to head_dim - 1 do
-          let head_out_j = ref (Value.create 0.0) in
-          List.iteri (fun idx (v_h_node:Value.t array) ->
-            head_out_j := !head_out_j +: (attn_weights.(idx) *: v_h_node.(j))
-          ) v_h;
-          x_attn.(hs + j) <- !head_out_j
-        done
-      done;
+        let acc = ref (Value.create 0.0) in
+        List.iteri (fun i vhi -> acc := !acc +: (attn_weights.(i) *: vhi.(hj))) v_h;
+        !acc
+      ) in
+      
       let x = Array.map2 (+:) x (linear x_attn l.wo) in
-
-      (* 2) MLP block: x = x + FC2(ReLU(FC1(norm(x)))) *)
-      let x_norm_mlp = rmsnorm x in
-      let mlp_act = Array.map Value.relu (linear x_norm_mlp l.fc1) in
-      let mlp_out = linear mlp_act l.fc2 in
+      let x_norm_mlp = x |> rmsnorm in
+      let mlp_out = 
+        linear x_norm_mlp l.fc1 
+        |> Array.map Value.relu 
+        |> fun act -> linear act l.fc2
+      in
       apply_layers (Array.map2 (+:) x mlp_out) (li + 1)
   in
-  linear (apply_layers x 0) state.lm_head
+  apply_layers x 0 |> fun out -> linear out state.lm_head
 
 (* --- Main Execution --- *)
 
@@ -249,23 +259,23 @@ let main () =
     for pos_id = 0 to n - 1 do
       let token_id, target_id = List.nth tokens pos_id, List.nth tokens (pos_id + 1) in
       let logits = gpt state token_id pos_id keys values in
-      losses := Value.neg (Value.log (softmax logits).(target_id)) :: !losses
+      losses := (logits |> softmax |> fun p -> Value.log p.(target_id) |> Value.neg) :: !losses
     done;
-    let avg_loss = (List.fold_left (+:) (Value.create 0.0) !losses) /: (Value.create (float_of_int n)) in
+    let avg_loss = (!losses |> List.fold_left (+:) (Value.create 0.0)) /: (Value.create (float_of_int n)) in
 
     Value.backward avg_loss;
 
     let lr_t = learning_rate *. (1.0 -. (float_of_int step /. float_of_int num_steps)) in
     Array.iteri (fun i (p : Value.t) ->
-      m.(i) <- beta1 *. m.(i) +. (1.0 -. beta1) *. p.grad;
-      v.(i) <- beta2 *. v.(i) +. (1.0 -. beta2) *. (p.grad ** 2.0);
+      m.(i) <- beta1 *. m.(i) +. (1.0 -. beta1) *. Value.grad p;
+      v.(i) <- beta2 *. v.(i) +. (1.0 -. beta2) *. (Value.grad p ** 2.0);
       let m_hat = m.(i) /. (1.0 -. (beta1 ** float_of_int (step + 1))) in
       let v_hat = v.(i) /. (1.0 -. (beta2 ** float_of_int (step + 1))) in
-      p.data <- p.data -. lr_t *. m_hat /. (sqrt v_hat +. eps_adam);
-      p.grad <- 0.0
+      Value.set_data p (Value.data p -. lr_t *. m_hat /. (sqrt v_hat +. eps_adam));
+      Value.set_grad p 0.0
     ) params_arr;
 
-    Printf.printf "step %4d / %4d | loss %.4f\r%!" (step + 1) num_steps avg_loss.data
+    Printf.printf "step %4d / %4d | loss %.4f\r%!" (step + 1) num_steps (Value.data avg_loss)
   done;
 
   (* 4. Inference *)
@@ -280,7 +290,7 @@ let main () =
       if pos_id >= block_size then ()
       else
         let logits = gpt state !token_id pos_id keys values in
-        let scaled_logits = Array.map (fun (v:Value.t) -> Value.create (v.data /. temperature)) logits in
+        let scaled_logits = Array.map (fun (v:Value.t) -> Value.create (Value.data v /. temperature)) logits in
         let probs = softmax scaled_logits in
         let r = Random.float 1.0 in
         let cumulative_prob = ref 0.0 in
@@ -288,7 +298,7 @@ let main () =
         let found = ref false in
         Array.iteri (fun i (p:Value.t) ->
           if not !found then begin
-            cumulative_prob := !cumulative_prob +. p.data;
+            cumulative_prob := !cumulative_prob +. Value.data p;
             if r <= !cumulative_prob then (selected_idx := i; found := true)
           end
         ) probs;
