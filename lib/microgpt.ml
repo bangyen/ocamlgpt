@@ -52,7 +52,7 @@ module Value = struct
         child.grad <- child.grad +. (local_grad *. v.grad)
       ) v._children v._local_grads;
       v._visited <- false (* Reset visited for next step *)
-    ) (List.rev !topo)
+    ) !topo
 end
 
 (* Helper operators for Value *)
@@ -62,16 +62,16 @@ let ( *: ) = Value.mul
 let ( /: ) = Value.div
 
 (* --- Configuration --- *)
-let n_layer = 1
-let n_embd = 16
-let block_size = 16
+let n_layer = 2
+let n_embd = 48
+let block_size = 32
 let n_head = 4
 let head_dim = n_embd / n_head
-let learning_rate = 0.01
+let learning_rate = 0.001
 let beta1 = 0.85
 let beta2 = 0.99
 let eps_adam = 1e-8
-let num_steps = 1000
+let num_steps = 500
 
 (* --- Random Initialization --- *)
 let gauss mean std =
@@ -155,9 +155,9 @@ let gpt state token_id pos_id keys values =
         
         for j = 0 to head_dim - 1 do
           let head_out_j = ref (Value.create 0.0) in
-          List.iter2 (fun (weight:Value.t) (v_h_node:Value.t array) ->
-            head_out_j := !head_out_j +: (weight *: v_h_node.(j))
-          ) (Array.to_list attn_weights) v_h;
+          List.iteri (fun idx (v_h_node:Value.t array) ->
+            head_out_j := !head_out_j +: (attn_weights.(idx) *: v_h_node.(j))
+          ) v_h;
           x_attn.(hs + j) <- !head_out_j
         done
       done;
@@ -190,14 +190,14 @@ let main () =
     let rec read_lines acc =
       try let line = input_line ic in read_lines (if line <> "" then line :: acc else acc)
       with End_of_file -> close_in ic; acc
-    in read_lines []
+    in Array.of_list (read_lines [])
   in
-  let all_chars = List.fold_left (fun s doc -> s ^ doc) "" docs |> String.to_seq |> List.of_seq |> List.sort_uniq Char.compare in
+  let all_chars = Array.fold_left (fun s doc -> s ^ doc) "" docs |> String.to_seq |> List.of_seq |> List.sort_uniq Char.compare in
   uchars := Array.of_list all_chars;
   vocab_size := Array.length !uchars + 1;
   bos_token := Array.length !uchars;
 
-  Printf.printf "num docs: %d\n" (List.length docs);
+  Printf.printf "num docs: %d\n" (Array.length docs);
   Printf.printf "vocab size: %d\n" !vocab_size;
 
   (* 2. Initialize Model *)
@@ -232,7 +232,7 @@ let main () =
   let v = Array.make (Array.length params_arr) 0.0 in
 
   for step = 1 to num_steps do
-    let doc = List.nth docs (Random.int (List.length docs)) in
+    let doc = docs.(Random.int (Array.length docs)) in
     let tokens = [!bos_token] @ (String.to_seq doc |> Seq.map (fun c ->
       let idx = ref 0 in
       while !idx < Array.length !uchars && !uchars.(!idx) <> c do incr idx done;
@@ -287,10 +287,17 @@ let main () =
         let logits = gpt state !token_id pos_id keys values in
         (* Greedy decoding for simplicity in OCaml port *)
         let probs = softmax logits in
-        let max_idx = ref 0 in
-        let max_prob = ref (-. 1.0) in
-        Array.iteri (fun i (p:Value.t) -> if p.data > !max_prob then (max_prob := p.data; max_idx := i)) probs;
-        token_id := !max_idx;
+        let r = Random.float 1.0 in
+        let cumulative_prob = ref 0.0 in
+        let selected_idx = ref (!bos_token) in
+        let found = ref false in
+        Array.iteri (fun i (p:Value.t) ->
+          if not !found then begin
+            cumulative_prob := !cumulative_prob +. p.data;
+            if r <= !cumulative_prob then (selected_idx := i; found := true)
+          end
+        ) probs;
+        token_id := !selected_idx;
         if !token_id <> !bos_token then begin
           sample := !sample @ [!uchars.(!token_id)];
           generate (pos_id + 1)
