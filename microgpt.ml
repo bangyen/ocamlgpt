@@ -182,7 +182,7 @@ let gpt state token_id pos_id keys values =
 
 let main () =
   let open Value in
-  Random.self_init ();
+  Random.init 42;
   (* 1. Load Data (Minimalist) *)
   if not (Sys.file_exists "input.txt") then begin
     Printf.printf "input.txt not found, downloading...\n%!";
@@ -229,7 +229,7 @@ let main () =
   Printf.printf "num params: %d\n" (Array.length params_arr);
 
   (* 3. Training Loop *)
-  Random.init 42;
+  (* 3. Training Loop *)
   let m = Array.make (Array.length params_arr) 0.0 in
   let v = Array.make (Array.length params_arr) 0.0 in
 
