@@ -5,9 +5,9 @@ An optimized, high-fidelity OCaml port of Andrej Karpathy's [microgpt.py](https:
 ## Features
 
 - **Single File**: The entire algorithm (Autograd, GPT, Training, Inference) is contained in `microgpt.ml`.
-- **High-Fidelity Port**: Matches the original architecture, parameter count (4192 for 1-layer), and Step 1 loss (~3.3) for bit-level alignment.
-- **Improved Capacity**: Default configuration uses 4 layers (~114k params) for significantly better convergence on the `names.txt` dataset.
-- **Performance Optimized**: Array-based forward/backward pass refactoring provides a ~250x-500x speedup over pure scalar implementations.
+- **Absolute Faithfulness**: Matches the original `n_layer = 1`, `n_embd = 16`, and `block_size = 16` defaults.
+- **Bit-Level Parity**: Matches parameter count (4192) and Step 1 loss (~3.3) exactly.
+- **Performance Optimized**: Array-based refactoring delivers a ~500x speedup over pure scalar math.
 - **Atomic Distillation**: No dependencies beyond the OCaml standard library.
 
 ## Requirements
