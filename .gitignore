@@ -9,3 +9,4 @@ _opam/
 microgpt
 benchmark/microgpt.py
 input.txt
+ocamlgpt.opam
