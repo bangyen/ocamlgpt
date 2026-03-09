@@ -194,7 +194,7 @@ let main () =
     let rec read_lines acc =
       try let line = input_line ic in read_lines (if line <> "" then line :: acc else acc)
     with End_of_file -> close_in ic; acc
-    in Array.of_list (read_lines [])
+    in Array.of_list (List.rev (read_lines []))
   in
   let all_chars = Array.fold_left (fun s doc -> s ^ doc) "" docs |> String.to_seq |> List.of_seq |> List.sort_uniq Char.compare in
   uchars := Array.of_list all_chars;
