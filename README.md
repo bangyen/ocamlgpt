@@ -14,6 +14,8 @@ An optimized, high-fidelity OCaml port of Andrej Karpathy's [microgpt.py](https:
 ## Requirements
 
 - OCaml 5.0+
+- `just` (optional, for common commands)
+- `python3` (for mathematical parity verification)
 - `curl` (for initial dataset download)
 
 ## Getting Started
@@ -33,7 +35,20 @@ The script automatically downloads the `names.txt` dataset and runs for 1000 ste
 ocaml microgpt.ml
 ```
 
-### 3. Compile for Maximum Performance (Native)
+### 3. Developer Workflow (Justfile)
+
+A `justfile` is provided for convenience. Run `just` to see all available recipes:
+
+```bash
+just build     # Compile both implementations
+just check     # Verify bit-level parity between microgpt and fastgpt
+just verify    # Verify mathematical parity with Python reference
+just run-fast  # Run the optimized FastGPT
+just run-micro # Run the minimalist MicroGPT
+just clean     # Remove build artifacts
+```
+
+### 4. Compile for Maximum Performance (Native)
 
 For significantly faster training, compile to a native binary:
 
