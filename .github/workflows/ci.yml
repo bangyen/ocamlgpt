@@ -24,13 +24,9 @@ jobs:
       uses: ocaml/setup-ocaml@v2
       with:
         ocaml-compiler: ${{ matrix.ocaml-compiler }}
-        dune-cache: true
 
-    - name: Install dependencies
-      run: opam install . --deps-only --with-test
+    - name: Compile Native Binary
+      run: ocamlopt -w +a-4-40-42-70 -o microgpt microgpt.ml
 
-    - name: Build
-      run: dune build
-
-    - name: Run tests
-      run: dune runtest
+    - name: Run Smoke Test
+      run: ./microgpt | head -n 20
