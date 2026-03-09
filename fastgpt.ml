@@ -578,10 +578,9 @@ let main () =
 
     Printf.printf "step %4d / %4d | loss %.4f\r%!" (step + 1) num_steps avg_loss
   done;
-  Printf.printf "\nTraining complete.\n";
-
+  done;
   (* 4. Inference *)
-  Printf.printf "--- inference (new, hallucinated names) ---\n";
+  Printf.printf "\n--- inference (new, hallucinated names) ---\n";
   for i = 1 to 20 do
     let rec gen tokens keys values =
       if List.length tokens > 15 then tokens
