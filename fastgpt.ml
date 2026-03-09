@@ -8,10 +8,6 @@
 
 open Bigarray
 
-open Bigarray
-
-(* --- Vectorized Autograd Engine --- *)
-
 (* --- Vectorized Autograd Engine --- *)
 module Tensor = struct
   type t = {
