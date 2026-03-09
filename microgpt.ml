@@ -134,7 +134,7 @@ let rmsnorm x =
   let scale = (ms /: Value.create n) +: Value.create 1e-5 |> fun v -> Value.pow v (-0.5) in
   x |> Array.map (fun xi -> xi *: scale)
 
-(* GPT Forward Pass: Multi-head attention + MLP residual blocks. *)
+(* --- GPT Forward Pass --- *)
 let gpt state token_id pos_id keys values =
   let x = Array.map2 (+:) state.wte.(token_id) state.wpe.(pos_id) |> rmsnorm in
 
