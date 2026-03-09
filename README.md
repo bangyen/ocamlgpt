@@ -48,6 +48,7 @@ For the ultimate performance, use `fastgpt.ml`. This version utilizes a vectoriz
 
 - **Speed**: 1000 steps in **~0.8s** (vs ~70s in Python).
 - **Architecture**: Vectorized Bigarray operations.
+- **Atomic**: Zero dependencies. Pure OCaml 5.
 - **Concurrency**: Native OCaml 5 Domain multi-core scaling.
 
 ```bash

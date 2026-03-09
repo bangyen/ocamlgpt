@@ -7,4 +7,5 @@ _opam/
 *.obj
 *.exe
 microgpt
+fastgpt
 input.txt
