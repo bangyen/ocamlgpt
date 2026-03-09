@@ -38,3 +38,24 @@ jobs:
         opam exec -- ./microgpt | head -n 12 > micro_out.txt
         opam exec -- ./fastgpt | head -n 12 > fast_out.txt
         diff micro_out.txt fast_out.txt
+
+  reference-parity:
+    runs-on: ubuntu-22.04
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Use OCaml 5.0.0
+      uses: ocaml/setup-ocaml@v3
+      with:
+        ocaml-compiler: 5.0.0
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Verify Mathematical Parity with Python Reference
+      run: |
+        chmod +x scripts/verify_parity_python.sh
+        opam exec -- ./scripts/verify_parity_python.sh
