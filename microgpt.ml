@@ -1,79 +1,91 @@
-(* microgpt.ml - OCaml port of Karpathy's microgpt.py *)
+(* 
+   microgpt.ml - A single-file, zero-dependency GPT-2 implementation in OCaml.
+   Architecture: 
+   - Autograd: Scalar-valued engine with reverse-mode differentiation.
+   - Model: GPT-2 with RMSNorm, Multi-Head Attention, and GELU-like ReLU MLP.
+   - Optimizer: Adam with linear learning rate decay.
+*)
 
 (* --- Autograd Engine --- *)
 module Value = struct
+  (* A node in the computational graph. 
+     _prev: parents of this node.
+     _op_grad: local partial derivatives with respect to each parent. *)
   type t = {
     mutable data : float;
     mutable grad : float;
-    _children : t list;
-    _local_grads : float list;
+    _prev : t list;
+    _op_grad : float list;
     mutable _visited : bool;
   }
 
-  let create ?(children=[]) ?(local_grads=[]) data =
-    { data; grad = 0.0; _children = children; _local_grads = local_grads; _visited = false }
+  let create ?(prev=[]) ?(op_grad=[]) data =
+    { data; grad = 0.0; _prev = prev; _op_grad = op_grad; _visited = false }
 
-  let add v1 v2 =
-    create ~children:[v1; v2] ~local_grads:[1.0; 1.0] (v1.data +. v2.data)
+  (* Core Operations: define the forward value and the local gradient. *)
+  let add a b = create ~prev:[a; b] ~op_grad:[1.0; 1.0] (a.data +. b.data)
+  let mul a b = create ~prev:[a; b] ~op_grad:[b.data; a.data] (a.data *. b.data)
+  let pow v n = create ~prev:[v] ~op_grad:[n *. (v.data ** (n -. 1.0))] (v.data ** n)
+  let log v   = create ~prev:[v] ~op_grad:[1.0 /. v.data] (log v.data)
+  let exp v   = let e = exp v.data in create ~prev:[v] ~op_grad:[e] e
+  let relu v  = create ~prev:[v] ~op_grad:[if v.data > 0.0 then 1.0 else 0.0] (max 0.0 v.data)
 
-  let mul v1 v2 =
-    create ~children:[v1; v2] ~local_grads:[v2.data; v1.data] (v1.data *. v2.data)
+  (* Derived Operations: built from core primitives. *)
+  let neg v   = mul v (create (-1.0))
+  let sub a b = add a (neg b)
+  let div a b = mul a (pow b (-1.0))
 
-  let pow v n =
-    create ~children:[v] ~local_grads:[n *. (v.data ** (n -. 1.0))] (v.data ** n)
-
-  let log v =
-    create ~children:[v] ~local_grads:[1.0 /. v.data] (log v.data)
-
-  let exp v =
-    let e = exp v.data in
-    create ~children:[v] ~local_grads:[e] e
-
-  let relu v =
-    create ~children:[v] ~local_grads:[if v.data > 0.0 then 1.0 else 0.0] (max 0.0 v.data)
-
-  let neg v = mul v (create (-1.0))
-  let sub v1 v2 = add v1 (neg v2)
-  let div v1 v2 = mul v1 (pow v2 (-1.0))
-
+  (* Reverse-mode Autograd: topological sort + gradient accumulation. *)
   let backward root =
     let topo = ref [] in
-    let rec build_topo v =
-      if not v._visited then begin
-        v._visited <- true;
-        List.iter build_topo v._children;
-        topo := v :: !topo
-      end
+    let rec build v =
+      if not v._visited then (v._visited <- true; List.iter build v._prev; topo := v :: !topo)
     in
-    build_topo root;
+    build root;
     root.grad <- 1.0;
-    List.iter (fun v ->
-      List.iter2 (fun child local_grad ->
-        child.grad <- child.grad +. (local_grad *. v.grad)
-      ) v._children v._local_grads;
-      v._visited <- false (* Reset visited for next step *)
-    ) !topo
+    List.fold_left (fun () v ->
+      List.iter2 (fun child og -> child.grad <- child.grad +. (og *. v.grad)) v._prev v._op_grad;
+      v._visited <- false (* Reset for next step *)
+    ) () !topo
 end
 
-(* Helper operators for Value *)
-let ( +: ) = Value.add
-let ( -: ) = Value.sub
-let ( *: ) = Value.mul
-let ( /: ) = Value.div
+let ( +: ), ( -: ), ( *: ), ( /: ) = Value.add, Value.sub, Value.mul, Value.div
 
-(* --- Configuration --- *)
-let n_layer = 1
-let n_embd = 16
-let block_size = 16
-let n_head = 4
-let head_dim = n_embd / n_head
+(* --- Configuration (Hardcoded for Parity) --- *)
+let n_layer = 1 (* Number of transformer blocks *)
+let n_embd = 16 (* Embedding dimension *)
+let block_size = 16 (* Maximum sequence length *)
+let n_head = 4 (* Number of attention heads *)
+let head_dim = n_embd / n_head (* Each head processes a slice of the embedding dimension. *)
 let learning_rate = 0.01
 let beta1 = 0.85
 let beta2 = 0.99
 let eps_adam = 1e-8
 let num_steps = 1000
 
-(* --- Random Initialization --- *)
+(* --- Model State --- *)
+type layer = {
+  wq : Value.t array array;
+  wk : Value.t array array;
+  wv : Value.t array array;
+  wo : Value.t array array;
+  fc1 : Value.t array array;
+  fc2 : Value.t array array;
+}
+
+type state = { 
+  wte : Value.t array array; 
+  wpe : Value.t array array; 
+  lm_head : Value.t array array; 
+  layers : layer array; 
+}
+
+(* Global Vocabulary State *)
+let vocab_size = ref 0
+let uchars = ref [||]
+let bos_token = ref 0
+
+(* --- Initialization & Matrix Ops --- *)
 let gauss mean std =
   let u1 = Random.float 1.0 in
   let u2 = Random.float 1.0 in
@@ -82,29 +94,15 @@ let gauss mean std =
 let matrix rows cols std =
   Array.init rows (fun _ -> Array.init cols (fun _ -> Value.create (gauss 0.0 std)))
 
-(* --- Model State --- *)
-type state = {
-  wte : Value.t array array;          (* vocab_size x n_embd *)
-  wpe : Value.t array array;          (* block_size x n_embd *)
-  lm_head : Value.t array array;      (* vocab_size x n_embd *)
-  layers : (string, Value.t array array) Hashtbl.t array;
-}
-
-(* Placeholder for vocab_size, will set after loading data *)
-let vocab_size = ref 0
-let uchars = ref [||]
-let bos_token = ref 0
-
-(* --- Model Forward Pass --- *)
+(* Linear Layer: y = xW^T (no bias, as per microgpt.py) *)
 let linear x w =
   Array.map (fun row ->
     let acc = ref (Value.create 0.0) in
-    for i = 0 to Array.length x - 1 do
-      acc := !acc +: (x.(i) *: row.(i))
-    done;
+    for i = 0 to Array.length x - 1 do acc := !acc +: (x.(i) *: row.(i)) done;
     !acc
   ) w
 
+(* Softmax: exp(xi) / sum(exp(xj)). Log-sum-exp trick used for stability. *)
 let softmax logits =
   let max_val = ref (-. infinity) in
   Array.iter (fun (v:Value.t) -> if v.data > !max_val then max_val := v.data) logits;
@@ -113,6 +111,7 @@ let softmax logits =
   Array.iter (fun e -> total := !total +: e) exps;
   Array.map (fun e -> e /: !total) exps
 
+(* RMSNorm: x / sqrt(mean(x^2) + eps). A simplified LayerNorm. *)
 let rmsnorm x =
   let n = float_of_int (Array.length x) in
   let ms = ref (Value.create 0.0) in
@@ -121,20 +120,17 @@ let rmsnorm x =
   let scale = Value.pow (avg_ms +: Value.create 1e-5) (-0.5) in
   Array.map (fun xi -> xi *: scale) x
 
+(* GPT Forward Pass: Multi-head attention + MLP residual blocks. *)
 let gpt state token_id pos_id keys values =
-  let tok_emb = state.wte.(token_id) in
-  let pos_emb = state.wpe.(pos_id) in
-  let x = Array.map2 (+:) tok_emb pos_emb |> rmsnorm in
+  let x = Array.map2 (+:) state.wte.(token_id) state.wpe.(pos_id) |> rmsnorm in
 
   let rec apply_layers x li =
     if li = n_layer then x
     else
-      let layer = state.layers.(li) in
-      (* 1) Multi-head Attention block *)
-      let x_norm_attn = rmsnorm x in
-      let q = linear x_norm_attn (Hashtbl.find layer "attn_wq") in
-      let k = linear x_norm_attn (Hashtbl.find layer "attn_wk") in
-      let v = linear x_norm_attn (Hashtbl.find layer "attn_wv") in
+      let l = state.layers.(li) in
+      (* 1) Multi-head Attention with Cache (keys/values lists) *)
+      let x_norm = rmsnorm x in
+      let q, k, v = linear x_norm l.wq, linear x_norm l.wk, linear x_norm l.wv in
       keys.(li) <- keys.(li) @ [k];
       values.(li) <- values.(li) @ [v];
 
@@ -145,15 +141,15 @@ let gpt state token_id pos_id keys values =
         let k_h = List.map (fun ki -> Array.sub ki hs head_dim) keys.(li) in
         let v_h = List.map (fun vi -> Array.sub vi hs head_dim) values.(li) in
 
+        (* Attention scores: dot(q, k) / sqrt(dim) *)
         let attn_logits = Array.of_list (List.map (fun (kh:Value.t array) ->
           let acc = ref (Value.create 0.0) in
-          for i = 0 to head_dim - 1 do
-            acc := !acc +: (q_h.(i) *: kh.(i))
-          done;
+          for i = 0 to head_dim - 1 do acc := !acc +: (q_h.(i) *: kh.(i)) done;
           !acc /: Value.create (sqrt (float_of_int head_dim))
         ) k_h) in
         let attn_weights = softmax attn_logits in
         
+        (* Weighted sum of values *)
         for j = 0 to head_dim - 1 do
           let head_out_j = ref (Value.create 0.0) in
           List.iteri (fun idx (v_h_node:Value.t array) ->
@@ -162,19 +158,15 @@ let gpt state token_id pos_id keys values =
           x_attn.(hs + j) <- !head_out_j
         done
       done;
-      let x_attn_out = linear x_attn (Hashtbl.find layer "attn_wo") in
-      let x = Array.map2 (+:) x x_attn_out in
+      let x = Array.map2 (+:) x (linear x_attn l.wo) in
 
-      (* 2) MLP block *)
+      (* 2) MLP block: x = x + FC2(ReLU(FC1(norm(x)))) *)
       let x_norm_mlp = rmsnorm x in
-      let mlp_fc1 = linear x_norm_mlp (Hashtbl.find layer "mlp_fc1") in
-      let mlp_act = Array.map Value.relu mlp_fc1 in
-      let mlp_fc2 = linear mlp_act (Hashtbl.find layer "mlp_fc2") in
-      let x = Array.map2 (+:) x mlp_fc2 in
-      apply_layers x (li + 1)
+      let mlp_act = Array.map Value.relu (linear x_norm_mlp l.fc1) in
+      let mlp_out = linear mlp_act l.fc2 in
+      apply_layers (Array.map2 (+:) x mlp_out) (li + 1)
   in
-  let x_final = apply_layers x 0 in
-  linear x_final state.lm_head
+  linear (apply_layers x 0) state.lm_head
 
 (* --- Main Execution --- *)
 
@@ -207,30 +199,23 @@ let main () =
     wte = matrix !vocab_size n_embd 0.08;
     wpe = matrix block_size n_embd 0.08;
     lm_head = matrix !vocab_size n_embd 0.08;
-    layers = Array.init n_layer (fun _ ->
-      let h = Hashtbl.create 6 in
-      Hashtbl.add h "attn_wq" (matrix n_embd n_embd 0.08);
-      Hashtbl.add h "attn_wk" (matrix n_embd n_embd 0.08);
-      Hashtbl.add h "attn_wv" (matrix n_embd n_embd 0.08);
-      Hashtbl.add h "attn_wo" (matrix n_embd n_embd 0.08);
-      Hashtbl.add h "mlp_fc1" (matrix (4 * n_embd) n_embd 0.08);
-      Hashtbl.add h "mlp_fc2" (matrix n_embd (4 * n_embd) 0.08);
-      h
-    );
+    layers = Array.init n_layer (fun _ -> {
+      wq = matrix n_embd n_embd 0.08;
+      wk = matrix n_embd n_embd 0.08;
+      wv = matrix n_embd n_embd 0.08;
+      wo = matrix n_embd n_embd 0.08;
+      fc1 = matrix (4 * n_embd) n_embd 0.08;
+      fc2 = matrix n_embd (4 * n_embd) 0.08;
+    });
   } in
 
-  let params_list = ref [] in
-  Array.iter (fun row -> Array.iter (fun p -> params_list := p :: !params_list) row) state.wte;
-  Array.iter (fun row -> Array.iter (fun p -> params_list := p :: !params_list) row) state.wpe;
-  Array.iter (fun row -> Array.iter (fun p -> params_list := p :: !params_list) row) state.lm_head;
-  Array.iter (fun layer ->
-    let keys = ["attn_wq"; "attn_wk"; "attn_wv"; "attn_wo"; "mlp_fc1"; "mlp_fc2"] in
-    List.iter (fun k ->
-      let mat = Hashtbl.find layer k in
-      Array.iter (fun row -> Array.iter (fun p -> params_list := p :: !params_list) row) mat
-    ) keys
-  ) state.layers;
-  let params_arr = Array.of_list (List.rev !params_list) in
+  let collect_params s =
+    let flatten m = Array.to_list m |> List.concat_map Array.to_list in
+    let layer_params l = List.concat_map flatten [l.wq; l.wk; l.wv; l.wo; l.fc1; l.fc2] in
+    List.concat [flatten s.wte; flatten s.wpe; flatten s.lm_head; 
+                 List.concat_map layer_params (Array.to_list s.layers)]
+  in
+  let params_arr = Array.of_list (collect_params state) in
   Printf.printf "num params: %d\n" (Array.length params_arr);
 
   (* 3. Training Loop *)
@@ -238,7 +223,6 @@ let main () =
   let m = Array.make (Array.length params_arr) 0.0 in
   let v = Array.make (Array.length params_arr) 0.0 in
 
-  (* Shuffling *)
   let docs_shuffled = 
     let d = Array.to_list docs in
     let shuffle l = 
@@ -259,25 +243,18 @@ let main () =
     ) |> List.of_seq) @ [!bos_token] in
     let n = min block_size (List.length tokens - 1) in
 
-    let keys = Array.make n_layer [] in
-    let values = Array.make n_layer [] in
+    let keys, values = Array.make n_layer [], Array.make n_layer [] in
     let losses = ref [] in
 
     for pos_id = 0 to n - 1 do
-      let token_id = List.nth tokens pos_id in
-      let target_id = List.nth tokens (pos_id + 1) in
+      let token_id, target_id = List.nth tokens pos_id, List.nth tokens (pos_id + 1) in
       let logits = gpt state token_id pos_id keys values in
-      let probs = softmax logits in
-      let loss_t = Value.neg (Value.log probs.(target_id)) in
-      losses := loss_t :: !losses
+      losses := Value.neg (Value.log (softmax logits).(target_id)) :: !losses
     done;
-    let sum_loss = List.fold_left (+:) (Value.create 0.0) !losses in
-    let avg_loss = sum_loss /: (Value.create (float_of_int n)) in
+    let avg_loss = (List.fold_left (+:) (Value.create 0.0) !losses) /: (Value.create (float_of_int n)) in
 
-    (* Backward *)
     Value.backward avg_loss;
 
-    (* Adam Update *)
     let lr_t = learning_rate *. (1.0 -. (float_of_int step /. float_of_int num_steps)) in
     Array.iteri (fun i (p : Value.t) ->
       m.(i) <- beta1 *. m.(i) +. (1.0 -. beta1) *. p.grad;
@@ -288,15 +265,14 @@ let main () =
       p.grad <- 0.0
     ) params_arr;
 
-    if step mod 10 = 0 || step = 0 then
-      Printf.printf "step %4d / %d | loss %.4f\n%!" (step + 1) num_steps avg_loss.data
+    Printf.printf "step %4d / %4d | loss %.4f\r%!" (step + 1) num_steps avg_loss.data
   done;
 
   (* 4. Inference *)
+  let temperature = 0.5 in
   Printf.printf "\n--- inference (new, hallucinated names) ---\n";
-  for sample_idx = 1 to 10 do
-    let keys = Array.make n_layer [] in
-    let values = Array.make n_layer [] in
+  for sample_idx = 1 to 20 do
+    let keys, values = Array.make n_layer [], Array.make n_layer [] in
     let token_id = ref !bos_token in
     let sample = ref [] in
 
@@ -304,10 +280,11 @@ let main () =
       if pos_id >= block_size then ()
       else
         let logits = gpt state !token_id pos_id keys values in
-        let probs = softmax logits in
+        let scaled_logits = Array.map (fun (v:Value.t) -> Value.create (v.data /. temperature)) logits in
+        let probs = softmax scaled_logits in
         let r = Random.float 1.0 in
         let cumulative_prob = ref 0.0 in
-        let selected_idx = ref (!bos_token) in
+        let selected_idx = ref !bos_token in
         let found = ref false in
         Array.iteri (fun i (p:Value.t) ->
           if not !found then begin
@@ -316,14 +293,10 @@ let main () =
           end
         ) probs;
         token_id := !selected_idx;
-        if !token_id <> !bos_token then begin
-          sample := !sample @ [!uchars.(!token_id)];
-          generate (pos_id + 1)
-        end
+        if !token_id <> !bos_token then (sample := !sample @ [!uchars.(!token_id)]; generate (pos_id + 1))
     in
     generate 0;
-    let name = String.of_seq (List.to_seq !sample) in
-    Printf.printf "sample %2d: %s\n" sample_idx name
+    Printf.printf "sample %2d: %s\n" sample_idx (String.of_seq (List.to_seq !sample))
   done
 
 let () =
