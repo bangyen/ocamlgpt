@@ -1,8 +1,9 @@
 (* 
-   fastgpt.ml - Hyper-optimized, parallelized GPT-2 distillation in OCaml.
-   Architecture:
+   fastgpt.ml - Hyper-optimized, parallelized GPT-2 implementation in OCaml.
+   
+   Performance-oriented design:
+   - Taped Autograd: Vectorized engine using Bigarrays and closure-based "tapes".
    - Parallelism: Native OCaml 5 Domain pool for multi-core scaling.
-   - Autograd: Taped, vectorized engine using Bigarrays.
 *)
 
 open Bigarray
@@ -22,6 +23,7 @@ module Tensor = struct
     let grad = Array2.create Float64 c_layout r c in
     Array2.fill data 0.0;
     Array2.fill grad 0.0;
+    (* _backward stores a closure that propagates gradients to children (The "Tape") *)
     { data; grad; _prev = []; _backward = (fun () -> ()); visited = false }
 
   let entry x r c = Array2.get x.data r c
@@ -331,37 +333,7 @@ type state = {
   layers : layer array; 
 }
 
-(* --- Scratch Buffers (Zero-Allocation) --- *)
-type scratch_layer = {
-  x_norm : Tensor.t; q : Tensor.t; k : Tensor.t; v : Tensor.t;
-  q_h : Tensor.t; attn_logits : Tensor.t; attn_weights : Tensor.t;
-  x_attn : Tensor.t; x_norm_mlp : Tensor.t; mlp_act : Tensor.t;
-  mlp_out : Tensor.t; attn_out : Tensor.t; x_resid : Tensor.t;
-  layer_out : Tensor.t;
-  k_cache : Tensor.t; v_cache : Tensor.t;
-}
-
-type scratch = {
-  tok_emb : Tensor.t; pos_emb : Tensor.t; x_init : Tensor.t;
-  layers : scratch_layer array;
-  final_logits : Tensor.t;
-}
-
-let create_scratch vocab_size = {
-  tok_emb = Tensor.create 1 n_embd; pos_emb = Tensor.create 1 n_embd;
-  x_init = Tensor.create 1 n_embd;
-  final_logits = Tensor.create 1 vocab_size;
-  layers = Array.init n_layer (fun _ -> {
-    x_norm = Tensor.create 1 n_embd; q = Tensor.create 1 n_embd;
-    k = Tensor.create 1 n_embd; v = Tensor.create 1 n_embd;
-    q_h = Tensor.create 1 head_dim; attn_logits = Tensor.create 1 block_size;
-    attn_weights = Tensor.create 1 block_size; x_attn = Tensor.create 1 n_embd;
-    x_norm_mlp = Tensor.create 1 n_embd; mlp_act = Tensor.create 1 (4 * n_embd);
-    mlp_out = Tensor.create 1 n_embd; attn_out = Tensor.create 1 n_embd;
-    x_resid = Tensor.create 1 n_embd; layer_out = Tensor.create 1 n_embd;
-    k_cache = Tensor.create block_size n_embd; v_cache = Tensor.create block_size n_embd;
-  });
-}
+(* Scratch buffers removed for simplicity - they are better suited for purely iterative inference loops *)
 
 let gauss mean std =
   let u1 = Random.float 1.0 in
@@ -369,19 +341,10 @@ let gauss mean std =
   mean +. std *. sqrt (-2.0 *. log u1) *. cos (2.0 *. Float.pi *. u2)
 
 (* --- GPT Forward Pass --- *)
-let gpt state tid pid ?scr keys values =
-  let x = 
-    match scr with
-    | Some s -> 
-        Tensor.slice_row_into s.tok_emb state.wte tid;
-        Tensor.slice_row_into s.pos_emb state.wpe pid;
-        Tensor.add_into s.x_init s.tok_emb s.pos_emb;
-        Tensor.rmsnorm s.x_init
-    | None -> 
-        let tok_emb = Tensor.slice_row state.wte tid in
-        let pos_emb = Tensor.slice_row state.wpe pid in
-        Tensor.add tok_emb pos_emb |> Tensor.rmsnorm
-  in
+let gpt state tid pid keys values =
+  let tok_emb = Tensor.slice_row state.wte tid in
+  let pos_emb = Tensor.slice_row state.wpe pid in
+  let x = Tensor.add tok_emb pos_emb |> Tensor.rmsnorm in
 
   let rec apply_layers x li =
     if li = n_layer then x
@@ -494,10 +457,6 @@ let main () =
     [state.wte; state.wpe; state.lm_head] @ 
     (Array.to_list state.layers |> List.concat_map (fun l -> [l.wq; l.wk; l.wv; l.wo; l.fc1; l.fc2]))
   in
-  let total_params = List.fold_left (fun acc p -> acc + Array2.dim1 p.Tensor.data * Array2.dim2 p.Tensor.data) 0 params in
-  Printf.printf "num params: %d\n" total_params;
-
-  let scratch = create_scratch vocab_size in
   let m = List.map (fun p -> Array2.create Float64 c_layout (Array2.dim1 p.Tensor.data) (Array2.dim2 p.Tensor.data)) params in
   let v = List.map (fun p -> Array2.create Float64 c_layout (Array2.dim1 p.Tensor.data) (Array2.dim2 p.Tensor.data)) params in
   List.iter (fun mt -> Array2.fill mt 0.0) m;
@@ -589,7 +548,7 @@ let main () =
       else
         let tid = List.hd (List.rev tokens) in
         let pos_id = List.length tokens - 1 in
-        let logits = gpt state tid pos_id ~scr:scratch keys values in
+        let logits = gpt state tid pos_id keys values in
         for j = 0 to vocab_size - 1 do Tensor.set_entry logits 0 j (Tensor.entry logits 0 j /. 0.5) done;
         let probs = Tensor.softmax logits in
         let r = Random.float 1.0 in
