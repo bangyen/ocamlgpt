@@ -311,7 +311,7 @@ let gpt state tid pid scr =
 
 (* --- Main --- *)
 let main () =
-  Random.self_init ();
+  Random.init 42;
   if not (Sys.file_exists "input.txt") then
     ignore (Sys.command "curl -s https://raw.githubusercontent.com/karpathy/makemore/988aa59/names.txt -o input.txt");
   let ic = open_in "input.txt" in
@@ -350,7 +350,7 @@ let main () =
   List.iter (fun v -> Array2.fill v 0.0) vs;
 
   (* Training Loop *)
-  Random.init 42;
+  (* Training Loop *)
   for step = 0 to num_steps - 1 do
     let doc = docs.(Random.int (Array.length docs)) in
     let tokens = [bos_token] @ (String.to_seq doc |> Seq.map (fun c ->
