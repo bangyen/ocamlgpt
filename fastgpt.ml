@@ -197,13 +197,28 @@ module Tensor = struct
       done
     )
 
-  let add a b = let r = Array2.dim1 a.data in let c = Array2.dim2 a.data in let out = create r c in add_into out a b; out
-  let matmul a b = let ar = Array2.dim1 a.data in let bc = Array2.dim2 b.data in let out = create ar bc in matmul_into out a b; out
-  let rmsnorm x = let r = Array2.dim1 x.data in let c = Array2.dim2 x.data in let out = create r c in rmsnorm_into out x; out
-  let softmax x = let r = Array2.dim1 x.data in let c = Array2.dim2 x.data in let out = create r c in softmax_into out x; out
-  let relu x = let r = Array2.dim1 x.data in let c = Array2.dim2 x.data in let out = create r c in relu_into out x; out
-  let slice_row x r len = let c = Array2.dim2 x.data in let out = create len c in slice_row_into out x r; out
-  let slice_col x c len = let r = Array2.dim1 x.data in let out = create r len in slice_col_into out x c len; out
+  let add a b = 
+    let r, c = Array2.dim1 a.data, Array2.dim2 a.data in 
+    let out = create r c in add_into out a b; out
+  let matmul a b = 
+    let ar = Array2.dim1 a.data in 
+    let bc = Array2.dim2 b.data in 
+    let out = create ar bc in matmul_into out a b; out
+  let rmsnorm x = 
+    let r, c = Array2.dim1 x.data, Array2.dim2 x.data in 
+    let out = create r c in rmsnorm_into out x; out
+  let softmax ?len x = 
+    let r, c = Array2.dim1 x.data, Array2.dim2 x.data in 
+    let out = create r c in softmax_into ?len out x; out
+  let relu x = 
+    let r, c = Array2.dim1 x.data, Array2.dim2 x.data in 
+    let out = create r c in relu_into out x; out
+  let slice_row x r = 
+    let c = Array2.dim2 x.data in 
+    let out = create 1 c in slice_row_into out x r; out
+  let slice_col x c len = 
+    let r = Array2.dim1 x.data in 
+    let out = create r len in slice_col_into out x c len; out
 end
 
 (* --- Configuration --- *)
@@ -252,62 +267,66 @@ let create_scratch vocab_size = {
   });
 }
 
-(* GPT Forward Pass (Zero-Allocation KV Cache) *)
-let gpt state tid pid scr =
-  Tensor.slice_row_into scr.tok_emb state.wte tid;
-  Tensor.slice_row_into scr.pos_emb state.wpe pid;
-  Tensor.add_into scr.x_init scr.tok_emb scr.pos_emb;
-  let x_init_norm = Tensor.rmsnorm scr.x_init in 
-  
+let gauss mean std =
+  let u1 = Random.float 1.0 in
+  let u2 = Random.float 1.0 in
+  mean +. std *. sqrt (-2.0 *. log u1) *. cos (2.0 *. Float.pi *. u2)
+
+(* GPT Forward Pass (Vectorized, support for both Training and Inference) *)
+let gpt state tid pid ?scr keys values =
+  let x = 
+    match scr with
+    | Some s -> 
+        Tensor.slice_row_into s.tok_emb state.wte tid;
+        Tensor.slice_row_into s.pos_emb state.wpe pid;
+        Tensor.add_into s.x_init s.tok_emb s.pos_emb;
+        Tensor.rmsnorm s.x_init
+    | None -> 
+        let tok_emb = Tensor.slice_row state.wte tid in
+        let pos_emb = Tensor.slice_row state.wpe pid in
+        Tensor.add tok_emb pos_emb |> Tensor.rmsnorm
+  in
+
   let rec apply_layers x li =
     if li = n_layer then x
     else
       let l = state.layers.(li) in
-      let s = scr.layers.(li) in
-      Tensor.rmsnorm_into s.x_norm x;
-      Tensor.matmul_into s.q s.x_norm l.wq;
-      Tensor.matmul_into s.k s.x_norm l.wk;
-      Tensor.matmul_into s.v s.x_norm l.wv;
-      
-      (* Copy k, v into cache at pid *)
-      for i = 0 to n_embd - 1 do
-        Tensor.set_entry s.k_cache pid i (Tensor.entry s.k 0 i);
-        Tensor.set_entry s.v_cache pid i (Tensor.entry s.v 0 i);
-      done;
+      let x_norm = Tensor.rmsnorm x in
+      let q, k, v = Tensor.matmul x_norm l.wq, Tensor.matmul x_norm l.wk, Tensor.matmul x_norm l.wv in
+      keys.(li) <- keys.(li) @ [k];
+      values.(li) <- values.(li) @ [v];
 
-      Array2.fill s.x_attn.data 0.0;
+      let x_attn = Tensor.create 1 n_embd in
       for h = 0 to n_head - 1 do
         let hs = h * head_dim in
-        Tensor.slice_col_into s.q_h s.q hs head_dim;
-        for t = 0 to pid do
+        let q_h = Tensor.slice_col q hs head_dim in
+        let k_h = List.map (fun ki -> Tensor.slice_col ki hs head_dim) keys.(li) in
+        let v_h = List.map (fun vi -> Tensor.slice_col vi hs head_dim) values.(li) in
+
+        let attn_logits = Tensor.create 1 (List.length k_h) in
+        List.iteri (fun t kh ->
           let dot = ref 0.0 in
           for i = 0 to head_dim - 1 do
-            dot := !dot +. (Tensor.entry s.q_h 0 i *. Tensor.entry s.k_cache t (hs + i))
+            dot := !dot +. (Tensor.entry q_h 0 i *. Tensor.entry kh 0 i )
           done;
-          Tensor.set_entry s.attn_logits 0 t (!dot /. sqrt (float_of_int head_dim))
-        done;
-        Tensor.softmax_into ~len:(pid + 1) s.attn_weights s.attn_logits;
+          Tensor.set_entry attn_logits 0 t (!dot /. sqrt (float_of_int head_dim))
+        ) k_h;
+        let attn_weights = Tensor.softmax attn_logits in
         
         for j = 0 to head_dim - 1 do
           let acc = ref 0.0 in
-          for t = 0 to pid do
-            acc := !acc +. (Tensor.entry s.attn_weights 0 t *. Tensor.entry s.v_cache t (hs + j))
-          done;
-          Tensor.set_entry s.x_attn 0 (hs + j) !acc
+          List.iteri (fun t vh ->
+            acc := !acc +. (Tensor.entry attn_weights 0 t *. Tensor.entry vh 0 j)
+          ) v_h;
+          Tensor.set_entry x_attn 0 (hs + j) !acc
         done
       done;
-      Tensor.matmul_into s.attn_out s.x_attn l.wo;
-      Tensor.add_into s.x_resid x s.attn_out; (* Residual 1 *)
-      Tensor.rmsnorm_into s.x_norm_mlp s.x_resid;
-      Tensor.matmul_into s.mlp_act s.x_norm_mlp l.fc1;
-      Tensor.relu_into s.mlp_act s.mlp_act;
-      Tensor.matmul_into s.mlp_out s.mlp_act l.fc2;
-      Tensor.add_into s.layer_out s.x_resid s.mlp_out;
-      apply_layers s.layer_out (li + 1)
+      
+      let x = Tensor.matmul x_attn l.wo |> Tensor.add x in
+      let mlp_out = Tensor.rmsnorm x |> fun xn -> Tensor.matmul xn l.fc1 |> Tensor.relu |> fun act -> Tensor.matmul act l.fc2 in
+      apply_layers (Tensor.add x mlp_out) (li + 1)
   in
-  let final_x = apply_layers x_init_norm 0 in
-  Tensor.matmul_into scr.final_logits final_x state.lm_head;
-  scr.final_logits
+  apply_layers x 0 |> fun out -> Tensor.matmul out state.lm_head
 
 (* --- Main --- *)
 let main () =
@@ -324,7 +343,7 @@ let main () =
 
   let mat r c = 
     let t = Tensor.create r c in
-    for i = 0 to r - 1 do for j = 0 to c - 1 do Tensor.set_entry t i j (Random.float 0.16 -. 0.08) done done;
+    for i = 0 to r - 1 do for j = 0 to c - 1 do Tensor.set_entry t i j (gauss 0.0 0.08) done done;
     t
   in
   let state = {
@@ -344,12 +363,11 @@ let main () =
   in
 
   let scratch = create_scratch vocab_size in
-  let ms = List.map (fun p -> Array2.create Float64 c_layout (Array2.dim1 p.Tensor.data) (Array2.dim2 p.Tensor.data)) params in
-  let vs = List.map (fun p -> Array2.create Float64 c_layout (Array2.dim1 p.Tensor.data) (Array2.dim2 p.Tensor.data)) params in
-  List.iter (fun m -> Array2.fill m 0.0) ms;
-  List.iter (fun v -> Array2.fill v 0.0) vs;
+  let m = List.map (fun p -> Array2.create Float64 c_layout (Array2.dim1 p.Tensor.data) (Array2.dim2 p.Tensor.data)) params in
+  let v = List.map (fun p -> Array2.create Float64 c_layout (Array2.dim1 p.Tensor.data) (Array2.dim2 p.Tensor.data)) params in
+  List.iter (fun mt -> Array2.fill mt 0.0) m;
+  List.iter (fun vt -> Array2.fill vt 0.0) v;
 
-  (* Training Loop *)
   (* Training Loop *)
   for step = 0 to num_steps - 1 do
     let doc = docs.(Random.int (Array.length docs)) in
@@ -357,16 +375,18 @@ let main () =
       let i = ref 0 in while !i < Array.length uchars && uchars.(!i) <> c do incr i done; !i
     ) |> List.of_seq) @ [bos_token] in
     let n = min block_size (List.length tokens - 1) in
-    let losses = ref [] in
     
     (* Reset gradients *)
     List.iter Tensor.zero_grad params;
 
+    let keys, values = Array.make n_layer [], Array.make n_layer [] in
+    let losses = ref [] in
+
     for pos_id = 0 to n - 1 do
       let tid, target = List.nth tokens pos_id, List.nth tokens (pos_id + 1) in
-      let logits = gpt state tid pos_id scratch in
+      let logits = gpt state tid pos_id keys values in
       let probs = Tensor.softmax logits in
-      let loss_val = -. log (Tensor.entry probs 0 target) in
+      let loss_val = -. log (max 1e-10 (Tensor.entry probs 0 target)) in
       let node = Tensor.create 1 1 in Tensor.set_entry node 0 0 loss_val;
       node._backward <- (fun () ->
         let g = Tensor.entry node 0 0 in
@@ -390,23 +410,23 @@ let main () =
     let beta1, beta2, eps = 0.85, 0.99, 1e-8 in
     let rec update ps m_list v_list =
       match ps, m_list, v_list with
-      | p :: pt, m :: mt, v :: vt ->
+      | p :: pt, mt :: mtt, vt :: vtt ->
           let r, c = Array2.dim1 p.Tensor.data, Array2.dim2 p.Tensor.data in
           for ir = 0 to r - 1 do for ic = 0 to c - 1 do
             let g = Array2.get p.Tensor.grad ir ic in
-            let mt_v = beta1 *. Array2.get m ir ic +. (1.0 -. beta1) *. g in
-            let vt_v = beta2 *. Array2.get v ir ic +. (1.0 -. beta2) *. (g *. g) in
-            Array2.set m ir ic mt_v; Array2.set v ir ic vt_v;
-            let m_hat = mt_v /. (1.0 -. (beta1 ** float_of_int (step + 1))) in
-            let v_hat = vt_v /. (1.0 -. (beta2 ** float_of_int (step + 1))) in
+            let m_val = beta1 *. Array2.get mt ir ic +. (1.0 -. beta1) *. g in
+            let v_val = beta2 *. Array2.get vt ir ic +. (1.0 -. beta2) *. (g *. g) in
+            Array2.set mt ir ic m_val; Array2.set vt ir ic v_val;
+            let m_hat = m_val /. (1.0 -. (beta1 ** float_of_int (step + 1))) in
+            let v_hat = v_val /. (1.0 -. (beta2 ** float_of_int (step + 1))) in
             let old_d = Array2.get p.Tensor.data ir ic in
             Array2.set p.Tensor.data ir ic (old_d -. lr_t *. m_hat /. (sqrt v_hat +. eps));
             Array2.set p.Tensor.grad ir ic 0.0
           done done;
-          update pt mt vt
+          update pt mtt vtt
       | _ -> ()
     in
-    update params ms vs;
+    update params m v;
 
     if step mod 10 = 0 || step = 0 then
       Printf.printf "step %4d | loss %.4f\r%!" (step + 1) avg_loss
@@ -416,12 +436,12 @@ let main () =
   (* 4. Inference *)
   Printf.printf "--- inference (new, hallucinated names) ---\n";
   for i = 1 to 20 do
-    let rec gen tokens =
+    let rec gen tokens keys values =
       if List.length tokens > 15 then tokens
       else
         let tid = List.hd (List.rev tokens) in
         let pos_id = List.length tokens - 1 in
-        let logits = gpt state tid pos_id scratch in
+        let logits = gpt state tid pos_id ~scr:scratch keys values in
         for j = 0 to vocab_size - 1 do Tensor.set_entry logits 0 j (Tensor.entry logits 0 j /. 0.5) done;
         let probs = Tensor.softmax logits in
         let r = Random.float 1.0 in
@@ -430,9 +450,10 @@ let main () =
           acc := !acc +. Tensor.entry probs 0 j;
           if r < !acc && !next_id = 0 then next_id := j
         done;
-        if !next_id = bos_token || !next_id = 0 then tokens else gen (tokens @ [!next_id])
+        if !next_id = bos_token || !next_id = 0 then tokens else gen (tokens @ [!next_id]) keys values
     in
-    let tokens = gen [bos_token] in
+    let keys, values = Array.make n_layer [], Array.make n_layer [] in
+    let tokens = gen [bos_token] keys values in
     let name = List.filter (fun t -> t <> bos_token) tokens |> List.map (fun t -> uchars.(t)) |> List.to_seq |> String.of_seq in
     Printf.printf "sample %2d: %s\n" i name
   done
