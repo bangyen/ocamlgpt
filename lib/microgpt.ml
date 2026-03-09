@@ -68,8 +68,8 @@ let block_size = 32
 let n_head = 4
 let head_dim = n_embd / n_head
 let learning_rate = 0.001
-let beta1 = 0.85
-let beta2 = 0.99
+let beta1 = 0.9
+let beta2 = 0.999
 let eps_adam = 1e-8
 let num_steps = 5000
 
@@ -228,6 +228,7 @@ let main () =
   Printf.printf "num params: %d\n" (Array.length params_arr);
 
   (* 3. Training Loop (Single doc for simplicity, loop for N steps) *)
+  Random.init 42;
   let m = Array.make (Array.length params_arr) 0.0 in
   let v = Array.make (Array.length params_arr) 0.0 in
 
