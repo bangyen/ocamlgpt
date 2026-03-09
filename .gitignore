@@ -7,6 +7,4 @@ _opam/
 *.obj
 *.exe
 microgpt
-benchmark/microgpt.py
 input.txt
-ocamlgpt.opam

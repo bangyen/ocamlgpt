@@ -191,7 +191,7 @@ let main () =
     let ic = open_in "input.txt" in
     let rec read_lines acc =
       try let line = input_line ic in read_lines (if line <> "" then line :: acc else acc)
-      with End_of_file -> close_in ic; acc
+    with End_of_file -> close_in ic; acc
     in Array.of_list (read_lines [])
   in
   let all_chars = Array.fold_left (fun s doc -> s ^ doc) "" docs |> String.to_seq |> List.of_seq |> List.sort_uniq Char.compare in
@@ -233,12 +233,12 @@ let main () =
   let params_arr = Array.of_list (List.rev !params_list) in
   Printf.printf "num params: %d\n" (Array.length params_arr);
 
-  (* 3. Training Loop (Single doc for simplicity, loop for N steps) *)
+  (* 3. Training Loop *)
   Random.init 42;
   let m = Array.make (Array.length params_arr) 0.0 in
   let v = Array.make (Array.length params_arr) 0.0 in
 
-  (* Shuffling as in microgpt.py *)
+  (* Shuffling *)
   let docs_shuffled = 
     let d = Array.to_list docs in
     let shuffle l = 
@@ -304,7 +304,6 @@ let main () =
       if pos_id >= block_size then ()
       else
         let logits = gpt state !token_id pos_id keys values in
-        (* Greedy decoding for simplicity in OCaml port *)
         let probs = softmax logits in
         let r = Random.float 1.0 in
         let cumulative_prob = ref 0.0 in
