@@ -50,6 +50,8 @@ ml = shuffle_pattern.sub('let docs_shuffled = docs in', ml)
 ml = ml.replace('let num_steps = 1000', 'let num_steps = 1')
 # Increase precision
 ml = ml.replace('%.4f', '%.8f')
+# Use newline instead of \r for grep
+ml = ml.replace('\\r%!', '\\n%!')
 
 with open('micro_test.ml', 'w') as f:
     f.write(ml)

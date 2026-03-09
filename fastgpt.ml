@@ -578,7 +578,6 @@ let main () =
 
     Printf.printf "step %4d / %4d | loss %.4f\r%!" (step + 1) num_steps avg_loss
   done;
-  done;
   (* 4. Inference *)
   Printf.printf "\n--- inference (new, hallucinated names) ---\n";
   for i = 1 to 20 do

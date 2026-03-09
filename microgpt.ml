@@ -181,7 +181,6 @@ let gpt state token_id pos_id keys values =
 (* --- Main Execution --- *)
 
 let main () =
-  let open Value in
   Random.init 42;
   (* 1. Load Data (Minimalist) *)
   if not (Sys.file_exists "input.txt") then begin
@@ -309,6 +308,4 @@ let main () =
     Printf.printf "sample %2d: %s\n" sample_idx (String.of_seq (List.to_seq !sample))
   done
 
-let () =
-  if Array.length Sys.argv > 0 && (Filename.basename Sys.argv.(0) = "microgpt.ml" || Filename.basename Sys.argv.(0) = "microgpt") then
-    main ()
+let () = main ()
