@@ -33,5 +33,7 @@ verify:
 
 # clean build artifacts
 clean:
-    @rm -f microgpt fastgpt *.o *.cmx *.cmi *.obj *.exe
-    @rm -f micro_test* ref.py
+    @rm -f microgpt fastgpt micro_test_bin micro_check_bin fast_check_bin
+    @rm -f *.o *.cmx *.cmi *.obj *.exe
+    @rm -f micro_test* micro_check* fast_check* ref.py
+    @rm -f input.txt micro_out.txt fast_out.txt
