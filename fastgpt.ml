@@ -451,6 +451,7 @@ let gpt state tid pid ?scr keys values =
 (* --- Main Execution --- *)
 let main () =
   Random.init 42;
+  (* 1. Load Data (Minimalist) *)
   if not (Sys.file_exists "input.txt") then
     ignore (Sys.command "curl -s https://raw.githubusercontent.com/karpathy/makemore/988aa59/names.txt -o input.txt");
   let ic = open_in "input.txt" in
@@ -474,6 +475,7 @@ let main () =
     for i = 0 to r - 1 do for j = 0 to c - 1 do Tensor.set_entry t i j (gauss 0.0 0.08) done done;
     t
   in
+  (* 2. Initialize Model *)
   let state = {
     wte = mat vocab_size n_embd;
     wpe = mat block_size n_embd;
@@ -512,7 +514,7 @@ let main () =
     in Array.of_list (shuffle d)
   in
 
-  (* Training Loop *)
+  (* 3. Training Loop *)
   for step = 0 to num_steps - 1 do
     let doc = docs_shuffled.(step mod Array.length docs_shuffled) in
     let tokens = [bos_token] @ (String.to_seq doc |> Seq.map (fun c ->
