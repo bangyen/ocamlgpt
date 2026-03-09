@@ -25,19 +25,22 @@ module type ENGINE = sig
   val set_grad : t -> float -> unit
 end
 
-(* --- Scalar Autograd Engine --- *)
+(* --- Scalar Autograd Engine --- 
+   This module tracks a computation graph of scalar values to compute gradients via reverse-mode AD.
+*)
 module Value : ENGINE = struct
   type t = {
     mutable data : float;
     mutable grad : float;
-    _prev : t list;
-    _op_grad : float list;
+    _prev : t list;       (* Ancestor nodes in the computation graph *)
+    _op_grad : float list; (* Local derivatives w.r.t. each ancestor *)
     mutable _visited : bool;
   }
 
   let create ?(prev=[]) ?(op_grad=[]) data =
     { data; grad = 0.0; _prev = prev; _op_grad = op_grad; _visited = false }
 
+  (* Basic operations: each creates a new node and stores local gradients (Chain Rule) *)
   let add a b = create ~prev:[a; b] ~op_grad:[1.0; 1.0] (a.data +. b.data)
   let mul a b = create ~prev:[a; b] ~op_grad:[b.data; a.data] (a.data *. b.data)
   let pow v n = create ~prev:[v] ~op_grad:[n *. (v.data ** (n -. 1.0))] (v.data ** n)
@@ -49,14 +52,16 @@ module Value : ENGINE = struct
   let sub a b = add a (neg b)
   let div a b = mul a (pow b (-1.0))
 
+  (* Reverse-mode autodiff: traverse the graph in reverse topological order *)
   let backward root =
     let topo = ref [] in
     let rec build v =
       if not v._visited then (v._visited <- true; List.iter build v._prev; topo := v :: !topo)
     in
     build root;
-    root.grad <- 1.0;
+    root.grad <- 1.0; (* Seed the gradient of the loss with 1.0 *)
     List.iter (fun v ->
+      (* Propagate gradients to children using the stored chain rule derivatives *)
       List.iter2 (fun child og -> child.grad <- child.grad +. (og *. v.grad)) v._prev v._op_grad;
       v._visited <- false
     ) !topo
@@ -144,6 +149,7 @@ let gpt state token_id pos_id keys values =
       let l = state.layers.(li) in
       let x_norm = x |> rmsnorm in
       let q, k, v = linear x_norm l.wq, linear x_norm l.wk, linear x_norm l.wv in
+      (* KV Caching: Store previous K/V for autoregressive inference/context *)
       keys.(li) <- keys.(li) @ [k];
       values.(li) <- values.(li) @ [v];
 
