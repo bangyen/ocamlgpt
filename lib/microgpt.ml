@@ -7,10 +7,11 @@ module Value = struct
     mutable grad : float;
     _children : t list;
     _local_grads : float list;
+    mutable _visited : bool;
   }
 
   let create ?(children=[]) ?(local_grads=[]) data =
-    { data; grad = 0.0; _children = children; _local_grads = local_grads }
+    { data; grad = 0.0; _children = children; _local_grads = local_grads; _visited = false }
 
   let add v1 v2 =
     create ~children:[v1; v2] ~local_grads:[1.0; 1.0] (v1.data +. v2.data)
@@ -35,13 +36,11 @@ module Value = struct
   let sub v1 v2 = add v1 (neg v2)
   let div v1 v2 = mul v1 (pow v2 (-1.0))
 
-  (* Topological sort for backward pass *)
   let backward root =
     let topo = ref [] in
-    let visited = ref [] in
     let rec build_topo v =
-      if not (List.memq v !visited) then begin
-        visited := v :: !visited;
+      if not v._visited then begin
+        v._visited <- true;
         List.iter build_topo v._children;
         topo := v :: !topo
       end
@@ -51,7 +50,8 @@ module Value = struct
     List.iter (fun v ->
       List.iter2 (fun child local_grad ->
         child.grad <- child.grad +. (local_grad *. v.grad)
-      ) v._children v._local_grads
+      ) v._children v._local_grads;
+      v._visited <- false (* Reset visited for next step *)
     ) (List.rev !topo)
 end
 
@@ -97,26 +97,34 @@ let bos_token = ref 0
 
 (* --- Model Forward Pass --- *)
 let linear x w =
-  Array.to_list (Array.map (fun row ->
-    List.fold_left2 (fun acc xi wi -> acc +: (xi *: wi)) (Value.create 0.0) x (Array.to_list row)
-  ) w)
+  Array.map (fun row ->
+    let acc = ref (Value.create 0.0) in
+    for i = 0 to Array.length x - 1 do
+      acc := !acc +: (x.(i) *: row.(i))
+    done;
+    !acc
+  ) w
 
 let softmax logits =
-  let max_val = List.fold_left (fun acc (v:Value.t) -> max acc v.data) (-. infinity) logits in
-  let exps = List.map (fun v -> Value.exp (v -: Value.create max_val)) logits in
-  let total = List.fold_left (+:) (Value.create 0.0) exps in
-  List.map (fun e -> e /: total) exps
+  let max_val = ref (-. infinity) in
+  Array.iter (fun (v:Value.t) -> if v.data > !max_val then max_val := v.data) logits;
+  let exps = Array.map (fun v -> Value.exp (v -: Value.create !max_val)) logits in
+  let total = ref (Value.create 0.0) in
+  Array.iter (fun e -> total := !total +: e) exps;
+  Array.map (fun e -> e /: !total) exps
 
 let rmsnorm x =
-  let n = float_of_int (List.length x) in
-  let ms = (List.fold_left (fun acc xi -> acc +: (xi *: xi)) (Value.create 0.0) x) /: Value.create n in
-  let scale = Value.pow (ms +: Value.create 1e-5) (-0.5) in
-  List.map (fun xi -> xi *: scale) x
+  let n = float_of_int (Array.length x) in
+  let ms = ref (Value.create 0.0) in
+  Array.iter (fun xi -> ms := !ms +: (xi *: xi)) x;
+  let avg_ms = !ms /: Value.create n in
+  let scale = Value.pow (avg_ms +: Value.create 1e-5) (-0.5) in
+  Array.map (fun xi -> xi *: scale) x
 
 let gpt state token_id pos_id keys values =
-  let tok_emb = Array.to_list state.wte.(token_id) in
-  let pos_emb = Array.to_list state.wpe.(pos_id) in
-  let x = List.map2 (+:) tok_emb pos_emb |> rmsnorm in
+  let tok_emb = state.wte.(token_id) in
+  let pos_emb = state.wpe.(pos_id) in
+  let x = Array.map2 (+:) tok_emb pos_emb |> rmsnorm in
 
   let rec apply_layers x li =
     if li = n_layer then x
@@ -129,30 +137,38 @@ let gpt state token_id pos_id keys values =
       keys.(li) <- keys.(li) @ [k];
       values.(li) <- values.(li) @ [v];
 
-      let x_attn = ref [] in
+      let x_attn = Array.make n_embd (Value.create 0.0) in
       for h = 0 to n_head - 1 do
         let hs = h * head_dim in
-        let q_h = List.filteri (fun i _ -> i >= hs && i < hs + head_dim) q in
-        let k_h = List.map (fun ki -> List.filteri (fun i _ -> i >= hs && i < hs + head_dim) ki) keys.(li) in
-        let v_h = List.map (fun vi -> List.filteri (fun i _ -> i >= hs && i < hs + head_dim) vi) values.(li) in
+        let q_h = Array.sub q hs head_dim in
+        let k_h = List.map (fun ki -> Array.sub ki hs head_dim) keys.(li) in
+        let v_h = List.map (fun vi -> Array.sub vi hs head_dim) values.(li) in
 
-        let attn_logits = List.map (fun kh ->
-          (List.fold_left2 (fun acc qh kh_j -> acc +: (qh *: kh_j)) (Value.create 0.0) q_h kh) /: Value.create (sqrt (float_of_int head_dim))
-        ) k_h in
+        let attn_logits = Array.of_list (List.map (fun (kh:Value.t array) ->
+          let acc = ref (Value.create 0.0) in
+          for i = 0 to head_dim - 1 do
+            acc := !acc +: (q_h.(i) *: kh.(i))
+          done;
+          !acc /: Value.create (sqrt (float_of_int head_dim))
+        ) k_h) in
         let attn_weights = softmax attn_logits in
-        let head_out = Array.init head_dim (fun j ->
-           List.fold_left2 (fun acc weight (vh:Value.t list) -> acc +: (weight *: (List.nth vh j))) (Value.create 0.0) attn_weights v_h
-        ) |> Array.to_list in
-        x_attn := !x_attn @ head_out
+        
+        for j = 0 to head_dim - 1 do
+          let head_out_j = ref (Value.create 0.0) in
+          List.iter2 (fun (weight:Value.t) (v_h_node:Value.t array) ->
+            head_out_j := !head_out_j +: (weight *: v_h_node.(j))
+          ) (Array.to_list attn_weights) v_h;
+          x_attn.(hs + j) <- !head_out_j
+        done
       done;
-      let x_attn_out = linear !x_attn (Hashtbl.find layer "attn_wo") in
-      let x_after_attn = List.map2 (+:) x x_attn_out |> rmsnorm in
+      let x_attn_out = linear x_attn (Hashtbl.find layer "attn_wo") in
+      let x_after_attn = Array.map2 (+:) x x_attn_out |> rmsnorm in
 
       (* MLP *)
       let mlp_fc1 = linear x_after_attn (Hashtbl.find layer "mlp_fc1") in
-      let mlp_act = List.map Value.relu mlp_fc1 in
+      let mlp_act = Array.map Value.relu mlp_fc1 in
       let mlp_fc2 = linear mlp_act (Hashtbl.find layer "mlp_fc2") in
-      let x_after_mlp = List.map2 (+:) x_after_attn mlp_fc2 in
+      let x_after_mlp = Array.map2 (+:) x_after_attn mlp_fc2 in
       apply_layers x_after_mlp (li + 1)
   in
   let x_final = apply_layers x 0 in
@@ -233,7 +249,7 @@ let main () =
       let target_id = List.nth tokens (pos_id + 1) in
       let logits = gpt state token_id pos_id keys values in
       let probs = softmax logits in
-      let loss_t = Value.neg (Value.log (List.nth probs target_id)) in
+      let loss_t = Value.neg (Value.log probs.(target_id)) in
       losses := loss_t :: !losses
     done;
     let sum_loss = List.fold_left (+:) (Value.create 0.0) !losses in
@@ -273,7 +289,7 @@ let main () =
         let probs = softmax logits in
         let max_idx = ref 0 in
         let max_prob = ref (-. 1.0) in
-        List.iteri (fun i (p:Value.t) -> if p.data > !max_prob then (max_prob := p.data; max_idx := i)) probs;
+        Array.iteri (fun i (p:Value.t) -> if p.data > !max_prob then (max_prob := p.data; max_idx := i)) probs;
         token_id := !max_idx;
         if !token_id <> !bos_token then begin
           sample := !sample @ [!uchars.(!token_id)];

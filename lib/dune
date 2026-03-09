@@ -1,3 +1,4 @@
 (library
  (name microgpt)
- (public_name ocamlgpt.lib))
+ (public_name ocamlgpt.lib)
+ (libraries unix))

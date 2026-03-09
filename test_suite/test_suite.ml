@@ -50,19 +50,19 @@ let test_relu () =
 let test_softmax () =
   printf "\n--- Testing Softmax ---\n";
   let open Value in
-  let logits = [create 1.0; create 2.0; create 0.0] in
+  let logits = [|create 1.0; create 2.0; create 0.0|] in
   let probs = softmax logits in
-  let total_prob = List.fold_left (fun acc p -> acc +. p.data) 0.0 probs in
+  let total_prob = Array.fold_left (fun acc p -> acc +. p.data) 0.0 probs in
   assert_float_equal "softmax total prob" 1.0 total_prob 1e-6;
-  printf "Softmax output: [%s]\n" (String.concat ", " (List.map (fun p -> string_of_float p.data) probs));
+  printf "Softmax output: [%s]\n" (String.concat ", " (Array.to_list (Array.map (fun p -> string_of_float p.data) probs)));
   ()
 
 let test_rmsnorm () =
   printf "\n--- Testing RMSNorm ---\n";
   let open Value in
-  let x = [create 1.0; create 2.0; create 3.0] in
+  let x = [|create 1.0; create 2.0; create 3.0|] in
   let y = rmsnorm x in
-  let ms = (List.fold_left (fun acc xi -> acc +. (xi.data *. xi.data)) 0.0 y) /. 3.0 in
+  let ms = (Array.fold_left (fun acc xi -> acc +. (xi.data *. xi.data)) 0.0 y) /. 3.0 in
   assert_float_equal "rmsnorm output ms" 1.0 ms 1e-5;
   ()
 
