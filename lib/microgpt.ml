@@ -130,10 +130,11 @@ let gpt state token_id pos_id keys values =
     if li = n_layer then x
     else
       let layer = state.layers.(li) in
-      let x_norm = rmsnorm x in
-      let q = linear x_norm (Hashtbl.find layer "attn_wq") in
-      let k = linear x_norm (Hashtbl.find layer "attn_wk") in
-      let v = linear x_norm (Hashtbl.find layer "attn_wv") in
+      (* 1) Multi-head Attention block *)
+      let x_norm_attn = rmsnorm x in
+      let q = linear x_norm_attn (Hashtbl.find layer "attn_wq") in
+      let k = linear x_norm_attn (Hashtbl.find layer "attn_wk") in
+      let v = linear x_norm_attn (Hashtbl.find layer "attn_wv") in
       keys.(li) <- keys.(li) @ [k];
       values.(li) <- values.(li) @ [v];
 
@@ -162,14 +163,15 @@ let gpt state token_id pos_id keys values =
         done
       done;
       let x_attn_out = linear x_attn (Hashtbl.find layer "attn_wo") in
-      let x_after_attn = Array.map2 (+:) x x_attn_out |> rmsnorm in
+      let x = Array.map2 (+:) x x_attn_out in
 
-      (* MLP *)
-      let mlp_fc1 = linear x_after_attn (Hashtbl.find layer "mlp_fc1") in
+      (* 2) MLP block *)
+      let x_norm_mlp = rmsnorm x in
+      let mlp_fc1 = linear x_norm_mlp (Hashtbl.find layer "mlp_fc1") in
       let mlp_act = Array.map Value.relu mlp_fc1 in
       let mlp_fc2 = linear mlp_act (Hashtbl.find layer "mlp_fc2") in
-      let x_after_mlp = Array.map2 (+:) x_after_attn mlp_fc2 in
-      apply_layers x_after_mlp (li + 1)
+      let x = Array.map2 (+:) x mlp_fc2 in
+      apply_layers x (li + 1)
   in
   let x_final = apply_layers x 0 in
   linear x_final state.lm_head
@@ -202,17 +204,17 @@ let main () =
 
   (* 2. Initialize Model *)
   let state = {
-    wte = matrix !vocab_size n_embd 0.02;
-    wpe = matrix block_size n_embd 0.02;
-    lm_head = matrix !vocab_size n_embd 0.02;
+    wte = matrix !vocab_size n_embd 0.08;
+    wpe = matrix block_size n_embd 0.08;
+    lm_head = matrix !vocab_size n_embd 0.08;
     layers = Array.init n_layer (fun _ ->
       let h = Hashtbl.create 6 in
-      Hashtbl.add h "attn_wq" (matrix n_embd n_embd 0.02);
-      Hashtbl.add h "attn_wk" (matrix n_embd n_embd 0.02);
-      Hashtbl.add h "attn_wv" (matrix n_embd n_embd 0.02);
-      Hashtbl.add h "attn_wo" (matrix n_embd n_embd 0.02);
-      Hashtbl.add h "mlp_fc1" (matrix (4 * n_embd) n_embd 0.02);
-      Hashtbl.add h "mlp_fc2" (matrix n_embd (4 * n_embd) 0.02);
+      Hashtbl.add h "attn_wq" (matrix n_embd n_embd 0.08);
+      Hashtbl.add h "attn_wk" (matrix n_embd n_embd 0.08);
+      Hashtbl.add h "attn_wv" (matrix n_embd n_embd 0.08);
+      Hashtbl.add h "attn_wo" (matrix n_embd n_embd 0.08);
+      Hashtbl.add h "mlp_fc1" (matrix (4 * n_embd) n_embd 0.08);
+      Hashtbl.add h "mlp_fc2" (matrix n_embd (4 * n_embd) 0.08);
       h
     );
   } in
@@ -222,7 +224,11 @@ let main () =
   Array.iter (fun row -> Array.iter (fun p -> params_list := p :: !params_list) row) state.wpe;
   Array.iter (fun row -> Array.iter (fun p -> params_list := p :: !params_list) row) state.lm_head;
   Array.iter (fun layer ->
-    Hashtbl.iter (fun _ mat -> Array.iter (fun row -> Array.iter (fun p -> params_list := p :: !params_list) row) mat) layer
+    let keys = ["attn_wq"; "attn_wk"; "attn_wv"; "attn_wo"; "mlp_fc1"; "mlp_fc2"] in
+    List.iter (fun k ->
+      let mat = Hashtbl.find layer k in
+      Array.iter (fun row -> Array.iter (fun p -> params_list := p :: !params_list) row) mat
+    ) keys
   ) state.layers;
   let params_arr = Array.of_list (List.rev !params_list) in
   Printf.printf "num params: %d\n" (Array.length params_arr);
@@ -232,8 +238,20 @@ let main () =
   let m = Array.make (Array.length params_arr) 0.0 in
   let v = Array.make (Array.length params_arr) 0.0 in
 
-  for step = 1 to num_steps do
-    let doc = docs.(Random.int (Array.length docs)) in
+  (* Shuffling as in microgpt.py *)
+  let docs_shuffled = 
+    let d = Array.to_list docs in
+    let shuffle l = 
+      let a = Array.of_list l in
+      for i = Array.length a - 1 downto 1 do
+        let j = Random.int (i + 1) in
+        let temp = a.(i) in a.(i) <- a.(j); a.(j) <- temp
+      done; Array.to_list a
+    in Array.of_list (shuffle d)
+  in
+
+  for step = 0 to num_steps - 1 do
+    let doc = docs_shuffled.(step mod Array.length docs_shuffled) in
     let tokens = [!bos_token] @ (String.to_seq doc |> Seq.map (fun c ->
       let idx = ref 0 in
       while !idx < Array.length !uchars && !uchars.(!idx) <> c do incr idx done;
@@ -264,14 +282,14 @@ let main () =
     Array.iteri (fun i (p : Value.t) ->
       m.(i) <- beta1 *. m.(i) +. (1.0 -. beta1) *. p.grad;
       v.(i) <- beta2 *. v.(i) +. (1.0 -. beta2) *. (p.grad ** 2.0);
-      let m_hat = m.(i) /. (1.0 -. (beta1 ** float_of_int step)) in
-      let v_hat = v.(i) /. (1.0 -. (beta2 ** float_of_int step)) in
+      let m_hat = m.(i) /. (1.0 -. (beta1 ** float_of_int (step + 1))) in
+      let v_hat = v.(i) /. (1.0 -. (beta2 ** float_of_int (step + 1))) in
       p.data <- p.data -. lr_t *. m_hat /. (sqrt v_hat +. eps_adam);
       p.grad <- 0.0
     ) params_arr;
 
-    if step mod 10 = 0 || step = 1 then
-      Printf.printf "step %4d / %d | loss %.4f\n%!" step num_steps avg_loss.data
+    if step mod 10 = 0 || step = 0 then
+      Printf.printf "step %4d / %d | loss %.4f\n%!" (step + 1) num_steps avg_loss.data
   done;
 
   (* 4. Inference *)
