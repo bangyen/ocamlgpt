@@ -37,7 +37,7 @@ module Tensor = struct
     List.iter (fun v ->
       v._backward ();
       v.visited <- false
-    ) (List.rev !topo)
+    ) !topo
 
   let zero_grad x = Array2.fill x.grad 0.0
 
@@ -92,6 +92,45 @@ module Tensor = struct
         done
       done
     )
+ 
+  let matmul_transposed_into out a b =
+    let ar, ac = Array2.dim1 a.data, Array2.dim2 a.data in
+    let br, bc = Array2.dim1 b.data, Array2.dim2 b.data in
+    for i = 0 to ar - 1 do
+      for j = 0 to br - 1 do
+        let acc = ref 0.0 in
+        for k = 0 to ac - 1 do
+          acc := !acc +. (Array2.get a.data i k *. Array2.get b.data j k)
+        done;
+        Array2.set out.data i j !acc
+      done
+    done;
+    out._prev <- [a; b];
+    out._backward <- (fun () ->
+      for i = 0 to ar - 1 do
+        for k = 0 to ac - 1 do
+          let acc = ref 0.0 in
+          for j = 0 to br - 1 do
+            acc := !acc +. (Array2.get out.grad i j *. Array2.get b.data j k)
+          done;
+          Array2.set a.grad i k (Array2.get a.grad i k +. !acc)
+        done
+      done;
+      for j = 0 to br - 1 do
+        for k = 0 to bc - 1 do
+          let acc = ref 0.0 in
+          for i = 0 to ar - 1 do
+            acc := !acc +. (Array2.get out.grad i j *. Array2.get a.data i k)
+          done;
+          Array2.set b.grad j k (Array2.get b.grad j k +. !acc)
+        done
+      done
+    )
+
+  let matmul_transposed a b = 
+    let ar = Array2.dim1 a.data in 
+    let br = Array2.dim1 b.data in 
+    let out = create ar br in matmul_transposed_into out a b; out
 
   let rmsnorm_into out x =
     let r, c = Array2.dim1 x.data, Array2.dim2 x.data in
@@ -109,12 +148,19 @@ module Tensor = struct
     out._backward <- (fun () ->
       for i = 0 to r - 1 do
         let ms = ref 0.0 in
-        for j = 0 to c - 1 do
-          let v = Array2.get x.data i j in ms := !ms +. (v *. v)
+        let dot_gx = ref 0.0 in
+        for j = 0 to c - 1 do 
+          let v = Array2.get x.data i j in 
+          ms := !ms +. (v *. v);
+          dot_gx := !dot_gx +. (Array2.get out.grad i j *. v)
         done;
-        let scale = 1.0 /. sqrt (!ms /. float_of_int c +. 1e-5) in
+        let m_val = !ms /. float_of_int c +. 1e-5 in
+        let scale = 1.0 /. sqrt m_val in
+        let scale3_c = (scale *. scale *. scale) /. float_of_int c in
         for j = 0 to c - 1 do
-          Array2.set x.grad i j (Array2.get x.grad i j +. (Array2.get out.grad i j *. scale))
+          let d_out = Array2.get out.grad i j in
+          let d_x = (d_out *. scale) -. (Array2.get x.data i j *. scale3_c *. !dot_gx) in
+          Array2.set x.grad i j (Array2.get x.grad i j +. d_x)
         done
       done
     )
@@ -197,6 +243,55 @@ module Tensor = struct
       done
     )
 
+  let dot_product_into out a b =
+    let c = Array2.dim2 a.data in
+    let acc = ref 0.0 in
+    for i = 0 to c - 1 do
+      acc := !acc +. (Array2.get a.data 0 i *. Array2.get b.data 0 i)
+    done;
+    Array2.set out.data 0 0 !acc;
+    out._prev <- [a; b];
+    out._backward <- (fun () ->
+      let g = Array2.get out.grad 0 0 in
+      for i = 0 to c - 1 do
+        Array2.set a.grad 0 i (Array2.get a.grad 0 i +. g *. Array2.get b.data 0 i);
+        Array2.set b.grad 0 i (Array2.get b.grad 0 i +. g *. Array2.get a.data 0 i)
+      done
+    )
+
+  let dot_product a b =
+    let out = create 1 1 in dot_product_into out a b; out
+
+  let weighted_sum_into out weights values =
+    (* weights: 1xT, values: list of 1xH tensors *)
+    let t = Array2.dim2 weights.data in
+    let h = Array2.dim2 out.data in
+    Array2.fill out.data 0.0;
+    List.iteri (fun i v ->
+      let w = Array2.get weights.data 0 i in
+      for j = 0 to h - 1 do
+        Array2.set out.data 0 j (Array2.get out.data 0 j +. w *. Array2.get v.data 0 j)
+      done
+    ) values;
+    out._prev <- weights :: values;
+    out._backward <- (fun () ->
+      let g_out = out.grad in
+      List.iteri (fun i v ->
+        let w = Array2.get weights.data 0 i in
+        let g_w = ref 0.0 in
+        for j = 0 to h - 1 do
+          let gj = Array2.get g_out 0 j in
+          g_w := !g_w +. gj *. Array2.get v.data 0 j;
+          Array2.set v.grad 0 j (Array2.get v.grad 0 j +. w *. gj)
+        done;
+        Array2.set weights.grad 0 i (Array2.get weights.grad 0 i +. !g_w)
+      ) values
+    )
+
+  let weighted_sum weights values =
+    let h = Array2.dim2 (List.hd values).data in
+    let out = create 1 h in weighted_sum_into out weights values; out
+
   let add a b = 
     let r, c = Array2.dim1 a.data, Array2.dim2 a.data in 
     let out = create r c in add_into out a b; out
@@ -224,6 +319,7 @@ end
 (* --- Configuration --- *)
 let n_layer, n_embd, block_size, n_head = 1, 16, 16, 4
 let head_dim, learning_rate, num_steps = n_embd / n_head, 0.01, 1000
+let beta1, beta2, eps = 0.85, 0.99, 1e-8
 
 type layer = {
   wq : Tensor.t; wk : Tensor.t; wv : Tensor.t; wo : Tensor.t;
@@ -292,41 +388,65 @@ let gpt state tid pid ?scr keys values =
     else
       let l = state.layers.(li) in
       let x_norm = Tensor.rmsnorm x in
-      let q, k, v = Tensor.matmul x_norm l.wq, Tensor.matmul x_norm l.wk, Tensor.matmul x_norm l.wv in
+      let q, k, v = Tensor.matmul_transposed x_norm l.wq, Tensor.matmul_transposed x_norm l.wk, Tensor.matmul_transposed x_norm l.wv in
       keys.(li) <- keys.(li) @ [k];
       values.(li) <- values.(li) @ [v];
 
-      let x_attn = Tensor.create 1 n_embd in
-      for h = 0 to n_head - 1 do
-        let hs = h * head_dim in
-        let q_h = Tensor.slice_col q hs head_dim in
-        let k_h = List.map (fun ki -> Tensor.slice_col ki hs head_dim) keys.(li) in
-        let v_h = List.map (fun vi -> Tensor.slice_col vi hs head_dim) values.(li) in
 
-        let attn_logits = Tensor.create 1 (List.length k_h) in
-        List.iteri (fun t kh ->
-          let dot = ref 0.0 in
-          for i = 0 to head_dim - 1 do
-            dot := !dot +. (Tensor.entry q_h 0 i *. Tensor.entry kh 0 i )
-          done;
-          Tensor.set_entry attn_logits 0 t (!dot /. sqrt (float_of_int head_dim))
-        ) k_h;
-        let attn_weights = Tensor.softmax attn_logits in
-        
-        for j = 0 to head_dim - 1 do
-          let acc = ref 0.0 in
-          List.iteri (fun t vh ->
-            acc := !acc +. (Tensor.entry attn_weights 0 t *. Tensor.entry vh 0 j)
-          ) v_h;
-          Tensor.set_entry x_attn 0 (hs + j) !acc
-        done
-      done;
+      let x_attn = 
+        let heads = ref [] in
+        for h = 0 to n_head - 1 do
+          let hs = h * head_dim in
+          let q_h = Tensor.slice_col q hs head_dim in
+          let k_h = List.map (fun ki -> Tensor.slice_col ki hs head_dim) keys.(li) in
+          let v_h = List.map (fun vi -> Tensor.slice_col vi hs head_dim) values.(li) in
+          let attn_logits_list = List.map (fun kh ->
+            let dot = Tensor.dot_product q_h kh in
+            let scaled_dot = Tensor.create 1 1 in
+            Tensor.set_entry scaled_dot 0 0 (Tensor.entry dot 0 0 /. sqrt (float_of_int head_dim));
+            scaled_dot.Tensor._prev <- [dot];
+            scaled_dot.Tensor._backward <- (fun () ->
+              let g = Array2.get scaled_dot.Tensor.grad 0 0 in
+              Array2.set dot.Tensor.grad 0 0 (Array2.get dot.Tensor.grad 0 0 +. g /. sqrt (float_of_int head_dim))
+            );
+            scaled_dot
+          ) k_h in
+          let attn_logits = Tensor.create 1 (List.length k_h) in
+          List.iteri (fun t dot_node ->
+            Tensor.set_entry attn_logits 0 t (Tensor.entry dot_node 0 0)
+          ) attn_logits_list;
+          attn_logits.Tensor._prev <- attn_logits_list;
+          attn_logits.Tensor._backward <- (fun () ->
+            List.iteri (fun t dot_node ->
+              Array2.set dot_node.Tensor.grad 0 0 (Array2.get dot_node.Tensor.grad 0 0 +. Array2.get attn_logits.Tensor.grad 0 t)
+            ) attn_logits_list
+          );
+          let attn_weights = Tensor.softmax attn_logits in
+          heads := Tensor.weighted_sum attn_weights v_h :: !heads
+        done;
+        let hs = List.rev !heads in
+        let out = Tensor.create 1 n_embd in
+        List.iteri (fun h (h_tensor : Tensor.t) ->
+          for j = 0 to head_dim - 1 do
+            Tensor.set_entry out 0 (h * head_dim + j) (Tensor.entry h_tensor 0 j)
+          done
+        ) hs;
+        out.Tensor._prev <- hs;
+        out.Tensor._backward <- (fun () ->
+          List.iteri (fun h (h_tensor : Tensor.t) ->
+            for j = 0 to head_dim - 1 do
+              Array2.set h_tensor.Tensor.grad 0 j (Array2.get h_tensor.Tensor.grad 0 j +. Array2.get out.Tensor.grad 0 (h * head_dim + j))
+            done
+          ) hs
+        );
+        out
+      in
       
-      let x = Tensor.matmul x_attn l.wo |> Tensor.add x in
-      let mlp_out = Tensor.rmsnorm x |> fun xn -> Tensor.matmul xn l.fc1 |> Tensor.relu |> fun act -> Tensor.matmul act l.fc2 in
+      let x = Tensor.matmul_transposed x_attn l.wo |> Tensor.add x in
+      let mlp_out = Tensor.rmsnorm x |> fun xn -> Tensor.matmul_transposed xn l.fc1 |> Tensor.relu |> fun act -> Tensor.matmul_transposed act l.fc2 in
       apply_layers (Tensor.add x mlp_out) (li + 1)
   in
-  apply_layers x 0 |> fun out -> Tensor.matmul out state.lm_head
+  apply_layers x 0 |> fun out -> Tensor.matmul_transposed out state.lm_head
 
 (* --- Main --- *)
 let main () =
@@ -334,12 +454,20 @@ let main () =
   if not (Sys.file_exists "input.txt") then
     ignore (Sys.command "curl -s https://raw.githubusercontent.com/karpathy/makemore/988aa59/names.txt -o input.txt");
   let ic = open_in "input.txt" in
-  let rec read acc = try read (input_line ic :: acc) with _ -> close_in ic; List.rev acc in
+  let rec read acc =
+    try
+      let line = input_line ic in
+      read (if line <> "" then line :: acc else acc)
+    with End_of_file -> close_in ic; List.rev acc
+  in
   let docs = Array.of_list (read []) in
   let all_chars = String.concat "" (Array.to_list docs) |> String.to_seq |> List.of_seq |> List.sort_uniq Char.compare in
   let uchars = Array.of_list all_chars in
   let vocab_size = Array.length uchars + 1 in
   let bos_token = Array.length uchars in
+
+  Printf.printf "num docs: %d\n" (Array.length docs);
+  Printf.printf "vocab size: %d\n" vocab_size;
 
   let mat r c = 
     let t = Tensor.create r c in
@@ -347,20 +475,25 @@ let main () =
     t
   in
   let state = {
-    wte = mat vocab_size n_embd; wpe = mat block_size n_embd; lm_head = mat n_embd vocab_size;
+    wte = mat vocab_size n_embd;
+    wpe = mat block_size n_embd;
+    lm_head = mat vocab_size n_embd;
     layers = Array.init n_layer (fun _ -> {
-      wq = mat n_embd n_embd; wk = mat n_embd n_embd; wv = mat n_embd n_embd; wo = mat n_embd n_embd;
-      fc1 = mat n_embd (4 * n_embd); fc2 = mat (4 * n_embd) n_embd;
-    })
+      wq = mat n_embd n_embd;
+      wk = mat n_embd n_embd;
+      wv = mat n_embd n_embd;
+      wo = mat n_embd n_embd;
+      fc1 = mat (4 * n_embd) n_embd;
+      fc2 = mat n_embd (4 * n_embd);
+    });
   } in
 
   let params = 
-    let res = ref [] in
-    let add p = res := p :: !res in
-    add state.wte; add state.wpe; add state.lm_head;
-    Array.iter (fun l -> List.iter add [l.wq; l.wk; l.wv; l.wo; l.fc1; l.fc2]) state.layers;
-    List.rev !res
+    [state.wte; state.wpe; state.lm_head] @ 
+    (Array.to_list state.layers |> List.concat_map (fun l -> [l.wq; l.wk; l.wv; l.wo; l.fc1; l.fc2]))
   in
+  let total_params = List.fold_left (fun acc p -> acc + Array2.dim1 p.Tensor.data * Array2.dim2 p.Tensor.data) 0 params in
+  Printf.printf "num params: %d\n" total_params;
 
   let scratch = create_scratch vocab_size in
   let m = List.map (fun p -> Array2.create Float64 c_layout (Array2.dim1 p.Tensor.data) (Array2.dim2 p.Tensor.data)) params in
@@ -368,9 +501,20 @@ let main () =
   List.iter (fun mt -> Array2.fill mt 0.0) m;
   List.iter (fun vt -> Array2.fill vt 0.0) v;
 
+  let docs_shuffled = 
+    let d = Array.to_list docs in
+    let shuffle l = 
+      let a = Array.of_list l in
+      for i = Array.length a - 1 downto 1 do
+        let j = Random.int (i + 1) in
+        let temp = a.(i) in a.(i) <- a.(j); a.(j) <- temp
+      done; Array.to_list a
+    in Array.of_list (shuffle d)
+  in
+
   (* Training Loop *)
   for step = 0 to num_steps - 1 do
-    let doc = docs.(Random.int (Array.length docs)) in
+    let doc = docs_shuffled.(step mod Array.length docs_shuffled) in
     let tokens = [bos_token] @ (String.to_seq doc |> Seq.map (fun c ->
       let i = ref 0 in while !i < Array.length uchars && uchars.(!i) <> c do incr i done; !i
     ) |> List.of_seq) @ [bos_token] in
@@ -386,28 +530,33 @@ let main () =
       let tid, target = List.nth tokens pos_id, List.nth tokens (pos_id + 1) in
       let logits = gpt state tid pos_id keys values in
       let probs = Tensor.softmax logits in
-      let loss_val = -. log (max 1e-10 (Tensor.entry probs 0 target)) in
+      let loss_val = -. log (Tensor.entry probs 0 target +. 1e-10) in
       let node = Tensor.create 1 1 in Tensor.set_entry node 0 0 loss_val;
-      node._backward <- (fun () ->
-        let g = Tensor.entry node 0 0 in
+      node.Tensor._prev <- [logits];
+      node.Tensor._backward <- (fun () ->
+        let g = Array2.get node.Tensor.grad 0 0 in
         for i = 0 to vocab_size - 1 do
           let si = Tensor.entry probs 0 i in
           let delta = if i = target then si -. 1.0 else si in
-          let old_g = Array2.get logits.grad 0 i in
-          Array2.set logits.grad 0 i (old_g +. g *. delta)
-        done;
-        logits._backward ()
+          let old_g = Array2.get logits.Tensor.grad 0 i in
+          Array2.set logits.Tensor.grad 0 i (old_g +. g *. delta)
+        done
       );
       losses := node :: !losses
     done;
 
-    let avg_loss = (List.fold_left (fun acc l -> acc +. Tensor.entry l 0 0) 0.0 !losses) /. float_of_int n in
-    List.iter (fun l -> Array2.set l.Tensor.grad 0 0 (1.0 /. float_of_int n)) !losses;
-    List.iter Tensor.backward !losses;
+    let avg_loss_node = Tensor.create 1 1 in
+    let total_loss_val = List.fold_left (fun acc l -> acc +. Tensor.entry l 0 0) 0.0 !losses in
+    Tensor.set_entry avg_loss_node 0 0 (total_loss_val /. float_of_int n);
+    avg_loss_node.Tensor._prev <- !losses;
+    avg_loss_node.Tensor._backward <- (fun () ->
+      List.iter (fun (l : Tensor.t) -> Array2.set l.grad 0 0 (1.0 /. float_of_int n)) !losses
+    );
+    Tensor.backward avg_loss_node;
+    let avg_loss = total_loss_val /. float_of_int n in
 
-    (* Adam Update *)
+    (* Adam Update Matching microgpt.ml *)
     let lr_t = learning_rate *. (1.0 -. (float_of_int step /. float_of_int num_steps)) in
-    let beta1, beta2, eps = 0.85, 0.99, 1e-8 in
     let rec update ps m_list v_list =
       match ps, m_list, v_list with
       | p :: pt, mt :: mtt, vt :: vtt ->
@@ -428,8 +577,7 @@ let main () =
     in
     update params m v;
 
-    if step mod 10 = 0 || step = 0 then
-      Printf.printf "step %4d | loss %.4f\r%!" (step + 1) avg_loss
+    Printf.printf "step %4d / %4d | loss %.4f\r%!" (step + 1) num_steps avg_loss
   done;
   Printf.printf "\nTraining complete.\n";
 
