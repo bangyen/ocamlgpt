@@ -56,4 +56,4 @@ jobs:
         python-version: '3.10'
 
     - name: Verify Mathematical Parity with Python Reference
-      run: python3 .github/scripts/verify_parity.py
+      run: opam exec -- python3 .github/scripts/verify_parity.py
