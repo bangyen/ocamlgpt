@@ -6,9 +6,10 @@ An optimized, high-fidelity OCaml port of Andrej Karpathy's [microgpt.py](https:
 
 - **Single File**: The entire algorithm (Autograd, GPT, Training, Inference) is contained in `microgpt.ml`.
 - **Absolute Faithfulness**: Matches the original `n_layer = 1`, `n_embd = 16`, and `block_size = 16` defaults.
-- **Bit-Level Parity**: Matches parameter count (4192) and Step 1 loss (~3.3) exactly.
-- **Performance Optimized**: Array-based refactoring delivers a ~500x speedup over pure scalar math.
-- **Atomic Distillation**: No dependencies beyond the OCaml standard library.
+- **Bit-Level Parity**: Matches parameter count (4192) and Step 1 loss exactly.
+- **Terminal Fidelity**: Reproduces the original Python's carriage-return (`\r`) logging aesthetics.
+- **Performance Optimized**: Array-based refactoring delivers significant speedups over pure scalar math.
+- **Atomic Distillation**: Zero dependencies. Pure OCaml.
 
 ## Requirements
 
@@ -26,7 +27,7 @@ eval $(opam env)
 
 ### 2. Run Training & Inference (Interpreted)
 
-The script automatically downloads the `names.txt` dataset and runs for 5000 steps.
+The script automatically downloads the `names.txt` dataset and runs for 1000 steps.
 
 ```bash
 ocaml microgpt.ml
@@ -45,7 +46,8 @@ ocamlopt -o microgpt microgpt.ml
 
 - **Autograd Engine**: A minimalist scalar-valued engine (`Value` module) in OCaml.
 - **Architecture**: Implements GPT-2 style residual blocks with **RMSNorm** and **Multi-head Attention**.
-- **Optimizer**: Adam with deterministic seeding (`Random.init 42`).
+- **Optimizer**: Adam with deterministic seeding and matching hyperparameters (`beta1=0.85`, `beta2=0.99`).
+- **State**: Uses idiomatic OCaml records to mirror Python's class-attribute architecture.
 
 ## Acknowledgments
 
