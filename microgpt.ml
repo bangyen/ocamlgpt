@@ -25,6 +25,7 @@ module type ENGINE = sig
   val set_grad : t -> float -> unit
 end
 
+(* --- Scalar Autograd Engine --- *)
 module Value : ENGINE = struct
   type t = {
     mutable data : float;
@@ -68,7 +69,7 @@ end
 
 let ( +: ), ( -: ), ( *: ), ( /: ) = Value.add, Value.sub, Value.mul, Value.div
 
-(* --- Configuration (Hardcoded for Parity) --- *)
+(* --- Configuration --- *)
 let n_layer = 1 (* Number of transformer blocks *)
 let n_embd = 16 (* Embedding dimension *)
 let block_size = 16 (* Maximum sequence length *)

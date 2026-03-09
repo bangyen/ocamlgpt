@@ -320,6 +320,7 @@ let n_layer, n_embd, block_size, n_head = 1, 16, 16, 4
 let head_dim, learning_rate, num_steps = n_embd / n_head, 0.01, 1000
 let beta1, beta2, eps = 0.85, 0.99, 1e-8
 
+(* --- Model State --- *)
 type layer = {
   wq : Tensor.t; wk : Tensor.t; wv : Tensor.t; wo : Tensor.t;
   fc1 : Tensor.t; fc2 : Tensor.t;
@@ -330,7 +331,7 @@ type state = {
   layers : layer array; 
 }
 
-(* Scratch buffers for zero-allocation forward/backward *)
+(* --- Scratch Buffers (Zero-Allocation) --- *)
 type scratch_layer = {
   x_norm : Tensor.t; q : Tensor.t; k : Tensor.t; v : Tensor.t;
   q_h : Tensor.t; attn_logits : Tensor.t; attn_weights : Tensor.t;
@@ -367,7 +368,7 @@ let gauss mean std =
   let u2 = Random.float 1.0 in
   mean +. std *. sqrt (-2.0 *. log u1) *. cos (2.0 *. Float.pi *. u2)
 
-(* GPT Forward Pass (Vectorized, support for both Training and Inference) *)
+(* --- GPT Forward Pass --- *)
 let gpt state tid pid ?scr keys values =
   let x = 
     match scr with
@@ -447,7 +448,7 @@ let gpt state tid pid ?scr keys values =
   in
   apply_layers x 0 |> fun out -> Tensor.matmul_transposed out state.lm_head
 
-(* --- Main --- *)
+(* --- Main Execution --- *)
 let main () =
   Random.init 42;
   if not (Sys.file_exists "input.txt") then
