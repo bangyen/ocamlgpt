@@ -62,7 +62,7 @@ let ( *: ) = Value.mul
 let ( /: ) = Value.div
 
 (* --- Configuration --- *)
-let n_layer = 2
+let n_layer = 4
 let n_embd = 48
 let block_size = 32
 let n_head = 4
@@ -71,7 +71,7 @@ let learning_rate = 0.001
 let beta1 = 0.85
 let beta2 = 0.99
 let eps_adam = 1e-8
-let num_steps = 500
+let num_steps = 5000
 
 (* --- Random Initialization --- *)
 let gauss mean std =
