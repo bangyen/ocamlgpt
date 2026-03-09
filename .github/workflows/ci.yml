@@ -26,7 +26,15 @@ jobs:
         ocaml-compiler: ${{ matrix.ocaml-compiler }}
 
     - name: Compile Native Binary
-      run: opam exec -- ocamlopt -w +a-4-40-42-70 -o microgpt microgpt.ml
+      run: |
+        opam exec -- ocamlopt -w +a-4-40-42-70 -o microgpt microgpt.ml
+        opam exec -- ocamlopt -w +a-4-40-42-70 -o fastgpt fastgpt.ml
 
     - name: Run Smoke Test
       run: opam exec -- ./microgpt | head -n 20
+
+    - name: Verify Bit-Level Parity
+      run: |
+        opam exec -- ./microgpt | head -n 12 > micro_out.txt
+        opam exec -- ./fastgpt | head -n 12 > fast_out.txt
+        diff micro_out.txt fast_out.txt
