@@ -41,12 +41,25 @@ module Value : ENGINE = struct
     { data; grad = 0.0; _prev = prev; _op_grad = op_grad; _visited = false }
 
   (* Basic operations: each creates a new node and stores local gradients (Chain Rule) *)
-  let add a b = create ~prev:[a; b] ~op_grad:[1.0; 1.0] (a.data +. b.data)
-  let mul a b = create ~prev:[a; b] ~op_grad:[b.data; a.data] (a.data *. b.data)
-  let pow v n = create ~prev:[v] ~op_grad:[n *. (v.data ** (n -. 1.0))] (v.data ** n)
-  let log v   = create ~prev:[v] ~op_grad:[1.0 /. v.data] (log v.data)
-  let exp v   = let e = exp v.data in create ~prev:[v] ~op_grad:[e] e
-  let relu v  = create ~prev:[v] ~op_grad:[if v.data > 0.0 then 1.0 else 0.0] (max 0.0 v.data)
+  let add a b = 
+    create ~prev:[a; b] ~op_grad:[1.0; 1.0] (a.data +. b.data)
+
+  let mul a b = 
+    create ~prev:[a; b] ~op_grad:[b.data; a.data] (a.data *. b.data)
+
+  let pow v n = 
+    create ~prev:[v] ~op_grad:[n *. (v.data ** (n -. 1.0))] (v.data ** n)
+
+  let log v = 
+    create ~prev:[v] ~op_grad:[1.0 /. v.data] (log v.data)
+
+  let exp v = 
+    let e = exp v.data in 
+    create ~prev:[v] ~op_grad:[e] e
+
+  let relu v = 
+    let grad = if v.data > 0.0 then 1.0 else 0.0 in
+    create ~prev:[v] ~op_grad:[grad] (max 0.0 v.data)
 
   let neg v   = mul v (create (-1.0))
   let sub a b = add a (neg b)
@@ -56,13 +69,19 @@ module Value : ENGINE = struct
   let backward root =
     let topo = ref [] in
     let rec build v =
-      if not v._visited then (v._visited <- true; List.iter build v._prev; topo := v :: !topo)
+      if not v._visited then begin
+        v._visited <- true; 
+        List.iter build v._prev; 
+        topo := v :: !topo
+      end
     in
     build root;
     root.grad <- 1.0; (* Seed the gradient of the loss with 1.0 *)
     List.iter (fun v ->
       (* Propagate gradients to children using the stored chain rule derivatives *)
-      List.iter2 (fun child og -> child.grad <- child.grad +. (og *. v.grad)) v._prev v._op_grad;
+      List.iter2 (fun child og -> 
+        child.grad <- child.grad +. (og *. v.grad)
+      ) v._prev v._op_grad;
       v._visited <- false
     ) !topo
 
@@ -72,13 +91,14 @@ module Value : ENGINE = struct
   let set_grad v g = v.grad <- g
 end
 
+(* Operator aliases for convenience *)
 let ( +: ), ( -: ), ( *: ), ( /: ) = Value.add, Value.sub, Value.mul, Value.div
 
 (* --- Configuration --- *)
-let n_layer = 1 (* Number of transformer blocks *)
-let n_embd = 16 (* Embedding dimension *)
-let block_size = 16 (* Maximum sequence length *)
-let n_head = 4 (* Number of attention heads *)
+let n_layer = 1         (* Number of transformer blocks *)
+let n_embd = 16         (* Embedding dimension *)
+let block_size = 16     (* Maximum sequence length *)
+let n_head = 4          (* Number of attention heads *)
 let head_dim = n_embd / n_head (* Each head processes a slice of the embedding dimension. *)
 let learning_rate = 0.01
 let beta1 = 0.85
@@ -109,19 +129,25 @@ let uchars = ref [||]
 let bos_token = ref 0
 
 (* --- Initialization & Matrix Ops --- *)
+
+(* Box-Muller transform for Gaussian sampling *)
 let gauss mean std =
   let u1 = Random.float 1.0 in
   let u2 = Random.float 1.0 in
   mean +. std *. sqrt (-2.0 *. log u1) *. cos (2.0 *. Float.pi *. u2)
 
 let matrix rows cols std =
-  Array.init rows (fun _ -> Array.init cols (fun _ -> Value.create (gauss 0.0 std)))
+  Array.init rows (fun _ -> 
+    Array.init cols (fun _ -> Value.create (gauss 0.0 std))
+  )
 
 (* Linear Layer: y = xW^T *)
 let linear x w =
   w |> Array.map (fun row ->
     let acc = ref (Value.create 0.0) in
-    for i = 0 to Array.length x - 1 do acc := !acc +: (x.(i) *: row.(i)) done;
+    for i = 0 to Array.length x - 1 do 
+      acc := !acc +: (x.(i) *: row.(i)) 
+    done;
     !acc
   )
 
@@ -136,7 +162,10 @@ let softmax logits =
 let rmsnorm x =
   let n = float_of_int (Array.length x) in
   let ms = Array.fold_left (fun acc xi -> acc +: (xi *: xi)) (Value.create 0.0) x in
-  let scale = (ms /: Value.create n) +: Value.create 1e-5 |> fun v -> Value.pow v (-0.5) in
+  let scale = 
+    (ms /: Value.create n) +: Value.create 1e-5 
+    |> fun v -> Value.pow v (-0.5) 
+  in
   x |> Array.map (fun xi -> xi *: scale)
 
 (* --- GPT Forward Pass --- *)
@@ -149,10 +178,12 @@ let gpt state token_id pos_id keys values =
       let l = state.layers.(li) in
       let x_norm = x |> rmsnorm in
       let q, k, v = linear x_norm l.wq, linear x_norm l.wk, linear x_norm l.wv in
+      
       (* KV Caching: Store previous K/V for autoregressive inference/context *)
       keys.(li) <- keys.(li) @ [k];
       values.(li) <- values.(li) @ [v];
 
+      (* Multi-Head Attention *)
       let x_attn = Array.init n_embd (fun j ->
         let h = j / head_dim in
         let hj = j mod head_dim in
@@ -164,16 +195,21 @@ let gpt state token_id pos_id keys values =
         let attn_weights = 
           k_h |> List.map (fun kh ->
             let acc = ref (Value.create 0.0) in
-            for i = 0 to head_dim - 1 do acc := !acc +: (q_h.(i) *: kh.(i)) done;
+            for i = 0 to head_dim - 1 do 
+              acc := !acc +: (q_h.(i) *: kh.(i)) 
+            done;
             !acc /: Value.create (sqrt (float_of_int head_dim))
           ) |> Array.of_list |> softmax
         in
         
         let acc = ref (Value.create 0.0) in
-        List.iteri (fun i vhi -> acc := !acc +: (attn_weights.(i) *: vhi.(hj))) v_h;
+        List.iteri (fun i vhi -> 
+          acc := !acc +: (attn_weights.(i) *: vhi.(hj))
+        ) v_h;
         !acc
       ) in
       
+      (* Residual Connection + FFN *)
       let x = Array.map2 (+:) x (linear x_attn l.wo) in
       let x_norm_mlp = x |> rmsnorm in
       let mlp_out = 
@@ -189,20 +225,31 @@ let gpt state token_id pos_id keys values =
 
 let main () =
   Random.init 42;
+  
   (* 1. Load Data (Minimalist) *)
   if not (Sys.file_exists "input.txt") then begin
     Printf.printf "input.txt not found, downloading...\n%!";
     let _ = Sys.command "curl -s https://raw.githubusercontent.com/karpathy/makemore/988aa59/names.txt -o input.txt" in
     ()
   end;
+  
   let docs =
     let ic = open_in "input.txt" in
     let rec read_lines acc =
-      try let line = input_line ic in read_lines (if line <> "" then line :: acc else acc)
-    with End_of_file -> close_in ic; acc
-    in Array.of_list (List.rev (read_lines []))
+      try 
+        let line = input_line ic in 
+        read_lines (if line <> "" then line :: acc else acc)
+      with End_of_file -> close_in ic; acc
+    in 
+    Array.of_list (List.rev (read_lines []))
   in
-  let all_chars = Array.fold_left (fun s doc -> s ^ doc) "" docs |> String.to_seq |> List.of_seq |> List.sort_uniq Char.compare in
+  
+  let all_chars = 
+    Array.fold_left (fun s doc -> s ^ doc) "" docs 
+    |> String.to_seq |> List.of_seq 
+    |> List.sort_uniq Char.compare 
+  in
+  
   uchars := Array.of_list all_chars;
   vocab_size := Array.length !uchars + 1;
   bos_token := Array.length !uchars;
@@ -228,13 +275,17 @@ let main () =
   let collect_params s =
     let flatten m = Array.to_list m |> List.concat_map Array.to_list in
     let layer_params l = List.concat_map flatten [l.wq; l.wk; l.wv; l.wo; l.fc1; l.fc2] in
-    List.concat [flatten s.wte; flatten s.wpe; flatten s.lm_head; 
-                 List.concat_map layer_params (Array.to_list s.layers)]
+    List.concat [
+      flatten s.wte; 
+      flatten s.wpe; 
+      flatten s.lm_head; 
+      List.concat_map layer_params (Array.to_list s.layers)
+    ]
   in
+  
   let params_arr = Array.of_list (collect_params state) in
   Printf.printf "num params: %d\n" (Array.length params_arr);
 
-  (* 3. Training Loop *)
   (* 3. Training Loop *)
   let m = Array.make (Array.length params_arr) 0.0 in
   let v = Array.make (Array.length params_arr) 0.0 in
@@ -246,38 +297,52 @@ let main () =
       for i = Array.length a - 1 downto 1 do
         let j = Random.int (i + 1) in
         let temp = a.(i) in a.(i) <- a.(j); a.(j) <- temp
-      done; Array.to_list a
-    in Array.of_list (shuffle d)
+      done; 
+      Array.to_list a
+    in 
+    Array.of_list (shuffle d)
   in
 
   for step = 0 to num_steps - 1 do
     let doc = docs_shuffled.(step mod Array.length docs_shuffled) in
-    let tokens = [!bos_token] @ (String.to_seq doc |> Seq.map (fun c ->
-      let idx = ref 0 in
-      while !idx < Array.length !uchars && !uchars.(!idx) <> c do incr idx done;
-      !idx
-    ) |> List.of_seq) @ [!bos_token] in
+    let tokens = 
+      [!bos_token] @ (String.to_seq doc |> Seq.map (fun c ->
+        let idx = ref 0 in
+        while !idx < Array.length !uchars && !uchars.(!idx) <> c do 
+          incr idx 
+        done;
+        !idx
+      ) |> List.of_seq) @ [!bos_token] 
+    in
     let n = min block_size (List.length tokens - 1) in
 
     let keys, values = Array.make n_layer [], Array.make n_layer [] in
     let losses = ref [] in
 
     for pos_id = 0 to n - 1 do
-      let token_id, target_id = List.nth tokens pos_id, List.nth tokens (pos_id + 1) in
+      let token_id = List.nth tokens pos_id in
+      let target_id = List.nth tokens (pos_id + 1) in
       let logits = gpt state token_id pos_id keys values in
-      losses := (logits |> softmax |> fun p -> Value.log p.(target_id) |> Value.neg) :: !losses
+      let loss = 
+        logits |> softmax |> fun p -> Value.log p.(target_id) |> Value.neg 
+      in
+      losses := loss :: !losses
     done;
-    let avg_loss = (!losses |> List.fold_left (+:) (Value.create 0.0)) /: (Value.create (float_of_int n)) in
+    
+    let total_loss = List.fold_left (+:) (Value.create 0.0) !losses in
+    let avg_loss = total_loss /: (Value.create (float_of_int n)) in
 
     Value.backward avg_loss;
 
+    (* Adam Optimizer update with linear learning rate decay *)
     let lr_t = learning_rate *. (1.0 -. (float_of_int step /. float_of_int num_steps)) in
     Array.iteri (fun i (p : Value.t) ->
       m.(i) <- beta1 *. m.(i) +. (1.0 -. beta1) *. Value.grad p;
       v.(i) <- beta2 *. v.(i) +. (1.0 -. beta2) *. (Value.grad p ** 2.0);
       let m_hat = m.(i) /. (1.0 -. (beta1 ** float_of_int (step + 1))) in
       let v_hat = v.(i) /. (1.0 -. (beta2 ** float_of_int (step + 1))) in
-      Value.set_data p (Value.data p -. lr_t *. m_hat /. (sqrt v_hat +. eps_adam));
+      let delta = lr_t *. m_hat /. (sqrt v_hat +. eps_adam) in
+      Value.set_data p (Value.data p -. delta);
       Value.set_grad p 0.0
     ) params_arr;
 
@@ -296,7 +361,9 @@ let main () =
       if pos_id >= block_size then ()
       else
         let logits = gpt state !token_id pos_id keys values in
-        let scaled_logits = Array.map (fun (v:Value.t) -> Value.create (Value.data v /. temperature)) logits in
+        let scaled_logits = 
+          Array.map (fun (v:Value.t) -> Value.create (Value.data v /. temperature)) logits 
+        in
         let probs = softmax scaled_logits in
         let r = Random.float 1.0 in
         let cumulative_prob = ref 0.0 in
@@ -309,7 +376,10 @@ let main () =
           end
         ) probs;
         token_id := !selected_idx;
-        if !token_id <> !bos_token then (sample := !sample @ [!uchars.(!token_id)]; generate (pos_id + 1))
+        if !token_id <> !bos_token then begin
+          sample := !sample @ [!uchars.(!token_id)]; 
+          generate (pos_id + 1)
+        end
     in
     generate 0;
     Printf.printf "sample %2d: %s\n" sample_idx (String.of_seq (List.to_seq !sample))
