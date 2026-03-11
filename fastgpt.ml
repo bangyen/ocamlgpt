@@ -509,36 +509,37 @@ let main () =
     List.iter Tensor.zero_grad params;
 
     let keys, values = Array.make n_layer [], Array.make n_layer [] in
-    let losses = ref [] in
 
-    for pos_id = 0 to n - 1 do
-      let tid, target = List.nth tokens pos_id, List.nth tokens (pos_id + 1) in
-      let logits = gpt state tid pos_id keys values in
-      let probs = Tensor.softmax logits in
-      let loss_val = -. log (Tensor.entry probs 0 target +. 1e-10) in
-      let node = Tensor.create 1 1 in 
-      Tensor.set_entry node 0 0 loss_val;
-      node.Tensor._prev <- [logits];
-      node.Tensor._backward <- (fun () ->
-        let g = Array2.get node.Tensor.grad 0 0 in
-        for i = 0 to vocab_size - 1 do
-          let si = Tensor.entry probs 0 i in
-          let delta = if i = target then si -. 1.0 else si in
-          let old_g = Array2.get logits.Tensor.grad 0 i in
-          Array2.set logits.Tensor.grad 0 i (old_g +. g *. delta)
-        done
-      );
-      losses := node :: !losses
-    done;
+    let losses = 
+      List.init n (fun pos_id ->
+        let tid, target = List.nth tokens pos_id, List.nth tokens (pos_id + 1) in
+        let logits = gpt state tid pos_id keys values in
+        let probs = Tensor.softmax logits in
+        let loss_val = -. log (Tensor.entry probs 0 target +. 1e-10) in
+        let node = Tensor.create 1 1 in 
+        Tensor.set_entry node 0 0 loss_val;
+        node.Tensor._prev <- [logits];
+        node.Tensor._backward <- (fun () ->
+          let g = Array2.get node.Tensor.grad 0 0 in
+          for i = 0 to vocab_size - 1 do
+            let si = Tensor.entry probs 0 i in
+            let delta = if i = target then si -. 1.0 else si in
+            let old_g = Array2.get logits.Tensor.grad 0 i in
+            Array2.set logits.Tensor.grad 0 i (old_g +. g *. delta)
+          done
+        );
+        node
+      )
+    in
 
     let avg_loss_node = Tensor.create 1 1 in
-    let total_loss_val = List.fold_left (fun acc l -> acc +. Tensor.entry l 0 0) 0.0 !losses in
+    let total_loss_val = List.fold_left (fun acc l -> acc +. Tensor.entry l 0 0) 0.0 losses in
     Tensor.set_entry avg_loss_node 0 0 (total_loss_val /. float_of_int n);
-    avg_loss_node.Tensor._prev <- !losses;
+    avg_loss_node.Tensor._prev <- losses;
     avg_loss_node.Tensor._backward <- (fun () ->
       List.iter (fun (l : Tensor.t) -> 
         Array2.set l.grad 0 0 (1.0 /. float_of_int n)
-      ) !losses
+      ) losses
     );
     Tensor.backward avg_loss_node;
     let avg_loss = total_loss_val /. float_of_int n in

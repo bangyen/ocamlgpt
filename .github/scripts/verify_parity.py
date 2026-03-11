@@ -36,7 +36,7 @@ def patch_ocaml(content):
     content = content.replace('\\r%!', '\\n%!')
     
     # Deterministic sampling
-    content = re.sub(r'token_id\s*:=\s*sample_prob\s+0\s+0\.0', 'token_id := 0', content)
+    content = re.sub(r'let next_id = sample_prob 0 0\.0 in', 'let next_id = 0 in', content)
     return content
 
 def run_output(cmd):
