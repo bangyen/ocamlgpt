@@ -336,9 +336,8 @@ let main () =
       in
       let sample_ids = generate 0 [!bos_token] |> List.tl in
       let sample_chars = List.map (fun id -> !uchars.(id)) sample_ids in
-      Printf.printf
-        "sample %2d: %s\n" sample_idx
-        (String.of_seq (List.to_seq sample_chars));
+      let sample_str = String.of_seq (List.to_seq sample_chars) in
+      Printf.printf "sample %2d: %s\n" sample_idx sample_str;
       infer_loop (sample_idx + 1)
     end
   in
