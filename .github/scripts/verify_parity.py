@@ -14,46 +14,29 @@ def download_reference():
 
 def patch_python(content):
     print("Patching Python reference...")
-    content = content.replace('random.shuffle(docs)', '# random.shuffle(docs)')
-    content = content.replace('random.gauss(0, std)', '0.02')
-    content = content.replace('num_steps = 1000', 'num_steps = 10')
+    content = re.sub(r'random\.shuffle\(docs\)', '# random.shuffle(docs)', content)
+    content = re.sub(r'random\.gauss\([^)]+\)', '0.02', content)
+    content = re.sub(r'\bnum_steps\s*=\s*\d+', 'num_steps = 10', content)
     content = content.replace("end='\\r'", "end='\\n'")
-    content = content.replace('loss {loss.data:.4f}', 'loss {loss.data:.8f}')
-    # Deterministic sampling: always pick the first token (usually BOS or 'a' etc.)
-    content = content.replace(
-        'token_id = random.choices(range(vocab_size), weights=[p.data for p in probs])[0]',
-        'token_id = 0'
-    )
+    content = re.sub(r'loss\s*\{\s*loss\.data\s*:\s*\.\d+f\s*\}', 'loss {loss.data:.8f}', content)
+    # Deterministic sampling: always pick the first token
+    content = re.sub(r'token_id\s*=\s*random\.choices.*', 'token_id = 0', content)
     return content
 
 def patch_ocaml(content):
     print("Patching OCaml port...")
-    # Robust document loading to match Python's [line.strip() for line in open('input.txt') if line.strip()]
-    data_loading_patch = """
-  let docs =
-    let ic = open_in "input.txt" in
-    let rec read_lines acc =
-      try 
-        let line = input_line ic in
-        let s = String.trim line in
-        read_lines (if s <> "" then s :: acc else acc)
-      with End_of_file -> close_in ic; List.rev acc
-    in 
-    Array.of_list (read_lines [])
-  in"""
-    content = re.sub(r'let docs =.*?in\s+Array\.of_list \(List\.rev \(read_lines \[\]\)\)\s+in', data_loading_patch, content, flags=re.DOTALL)
-
-    content = content.replace('gauss 0.0 std', '0.02')
-    # Disable shuffle: replace the entire docs_shuffled block
-    # We use a very lazy regex to match the docs_shuffled block until the next 'for' or similar
-    content = re.sub(r'let docs_shuffled =.*?in\s+for step', 'let docs_shuffled = docs in\n\n  for step', content, flags=re.DOTALL)
+    content = re.sub(r'gauss\s+0\.0\s+std', '0.02', content)
+    content = re.sub(r'let gauss.*?\(2\.0 \*\. Float\.pi \*\. u2\)', 'let gauss mean std = 0.02', content, flags=re.DOTALL)
     
-    content = content.replace('let num_steps = 1000', 'let num_steps = 10')
+    # Disable shuffle by turning it into identity
+    content = re.sub(r'let shuffle l =\s*.*?\s+in\s+Array\.of_list \(shuffle d\)', 'let shuffle l = l in\n    Array.of_list (shuffle d)', content, flags=re.DOTALL)
+    
+    content = re.sub(r'let num_steps\s*=\s*\d+', 'let num_steps = 10', content)
     content = content.replace('%.4f', '%.8f')
     content = content.replace('\\r%!', '\\n%!')
     
-    # Deterministic sampling: overwrite the entire sampling logic to always pick token 0 if not BOS
-    content = content.replace('token_id := !selected_idx;', 'token_id := 0;')
+    # Deterministic sampling
+    content = re.sub(r'token_id\s*:=\s*!selected_idx', 'token_id := 0', content)
     return content
 
 def run_output(cmd):

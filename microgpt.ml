@@ -117,26 +117,23 @@ let matrix ?(std = 0.08) rows cols =
 (* Linear Layer: y = xW^T *)
 let linear x w =
   Array.map (fun row ->
-    let seq_x = Array.to_seq x and seq_row = Array.to_seq row in
-    Seq.fold_left2 (fun acc a b -> acc +: (a *: b)) Value.zero seq_x seq_row
+    Seq.fold_left2 (fun a b c -> a +: (b *: c))
+      Value.zero (Array.to_seq x) (Array.to_seq row)
   ) w
 
 (* Softmax: exp(xi) / sum(exp(xj)) *)
 let softmax logits =
-  let max_val = Array.fold_left (fun m v -> max m (Value.data v)) (-. infinity) logits in
-  let exps = logits |> Array.map (fun v -> Value.exp (v -: Value.scalar max_val)) in
+  let max_val = Array.fold_left (fun m v -> max m (Value.data v)) (-.infinity) logits in
+  let exps = Array.map (fun v -> Value.exp (v -: Value.scalar max_val)) logits in
   let total = Array.fold_left (+:) Value.zero exps in
-  exps |> Array.map (fun e -> e /: total)
+  Array.map (fun e -> e /: total) exps
 
 (* RMSNorm: x / sqrt(mean(x^2) + eps) *)
 let rmsnorm x =
-  let n = float_of_int (Array.length x) in
-  let ms = Array.fold_left (fun acc xi -> acc +: (xi *: xi)) Value.zero x in
-  let scale = 
-    (ms /: Value.scalar n) +: Value.scalar 1e-5 
-    |> fun v -> Value.pow v (-0.5) 
-  in
-  x |> Array.map (fun xi -> xi *: scale)
+  let ms    = Array.fold_left (fun a xi -> a +: (xi *: xi)) Value.zero x in
+  let base  = ms /: Value.scalar (float (Array.length x)) +: Value.scalar 1e-5 in
+  let scale = Value.pow base (-0.5) in
+  Array.map (fun xi -> xi *: scale) x
 
 (* --- GPT Forward Pass --- *)
 let gpt state token_id pos_id keys values =
@@ -224,14 +221,14 @@ let main () =
 
   (* 2. Initialize Model *)
   let state = {
-    wte = matrix !vocab_size n_embd;
-    wpe = matrix block_size n_embd;
+    wte     = matrix !vocab_size n_embd;
+    wpe     = matrix block_size n_embd;
     lm_head = matrix !vocab_size n_embd;
-    layers = Array.init n_layer (fun _ -> {
-      wq = matrix n_embd n_embd;
-      wk = matrix n_embd n_embd;
-      wv = matrix n_embd n_embd;
-      wo = matrix n_embd n_embd;
+    layers  = Array.init n_layer (fun _ -> {
+      wq  = matrix n_embd n_embd;
+      wk  = matrix n_embd n_embd;
+      wv  = matrix n_embd n_embd;
+      wo  = matrix n_embd n_embd;
       fc1 = matrix (4 * n_embd) n_embd;
       fc2 = matrix n_embd (4 * n_embd);
     });
