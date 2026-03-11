@@ -81,20 +81,22 @@ let eps_adam      = 1e-8
 let num_steps     = 1000
 
 (* --- Model State --- *)
+type mat = Value.t array array
+
 type layer = {
-  wq  : Value.t array array;
-  wk  : Value.t array array;
-  wv  : Value.t array array;
-  wo  : Value.t array array;
-  fc1 : Value.t array array;
-  fc2 : Value.t array array;
+  wq  : mat;
+  wk  : mat;
+  wv  : mat;
+  wo  : mat;
+  fc1 : mat;
+  fc2 : mat;
 }
 
 type state = { 
-  wte : Value.t array array; 
-  wpe : Value.t array array; 
-  lm_head : Value.t array array; 
-  layers : layer array; 
+  wte     : mat; 
+  wpe     : mat; 
+  lm_head : mat; 
+  layers  : layer array; 
 }
 
 (* --- Global Configuration & Vocabulary --- *)
