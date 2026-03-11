@@ -114,8 +114,8 @@ let matrix ?(std = 0.08) rows cols =
     Array.init cols (fun _ -> Value.scalar (gauss 0.0 std))
   )
 
-(* Linear Layer: y = xW^T *)
-let linear x w =
+(* Linear Layer: y = xW^T (Arguments flipped for pipelining) *)
+let linear w x =
   Array.map (fun row ->
     Seq.fold_left2 (fun a b c -> a +: (b *: c))
       Value.zero (Array.to_seq x) (Array.to_seq row)
@@ -144,7 +144,7 @@ let gpt state token_id pos_id keys values =
     else
       let l = state.layers.(li) in
       let x_norm = x |> rmsnorm in
-      let q, k, v = linear x_norm l.wq, linear x_norm l.wk, linear x_norm l.wv in
+      let q, k, v = linear l.wq x_norm, linear l.wk x_norm, linear l.wv x_norm in
       
       (* KV Caching: Store previous K/V for autoregressive inference/context *)
       keys.(li) <- keys.(li) @ [k];
@@ -173,16 +173,16 @@ let gpt state token_id pos_id keys values =
       ) in
       
       (* Residual Connection + FFN *)
-      let x = Array.map2 (+:) x (linear x_attn l.wo) in
-      let x_norm_mlp = x |> rmsnorm in
+      let x = Array.map2 (+:) x (x_attn |> linear l.wo) in
       let mlp_out = 
-        linear x_norm_mlp l.fc1 
+        x |> rmsnorm 
+        |> linear l.fc1 
         |> Array.map Value.relu 
-        |> fun act -> linear act l.fc2
+        |> linear l.fc2
       in
       apply_layers (Array.map2 (+:) x mlp_out) (li + 1)
   in
-  apply_layers x 0 |> fun out -> linear out state.lm_head
+  apply_layers x 0 |> linear state.lm_head
 
 (* --- Main Execution --- *)
 
@@ -198,12 +198,12 @@ let main () =
   
   let docs = 
     In_channel.with_open_text "input.txt" In_channel.input_lines
-    |> List.filter (fun s -> s <> "") 
+    |> List.filter ((<>) "") 
     |> Array.of_list
   in
   
   let all_chars = 
-    Array.fold_left (fun s doc -> s ^ doc) "" docs 
+    String.concat "" (Array.to_list docs)
     |> String.to_seq |> List.of_seq 
     |> List.sort_uniq Char.compare 
   in

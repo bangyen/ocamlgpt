@@ -325,6 +325,8 @@ let gauss mean std =
   let u2 = Random.float 1.0 in
   mean +. std *. sqrt (-2.0 *. log u1) *. cos (2.0 *. Float.pi *. u2)
 
+let linear w x = Tensor.matmul_transposed x w
+
 (* --- GPT Forward Pass --- *)
 let gpt state tid pid keys values =
   let tok_emb = Tensor.slice_row state.wte tid in
@@ -337,9 +339,9 @@ let gpt state tid pid keys values =
       let l = state.layers.(li) in
       let x_norm = Tensor.rmsnorm x in
       let q, k, v = 
-        Tensor.matmul_transposed x_norm l.wq, 
-        Tensor.matmul_transposed x_norm l.wk, 
-        Tensor.matmul_transposed x_norm l.wv 
+        linear l.wq x_norm, 
+        linear l.wk x_norm, 
+        linear l.wv x_norm
       in
       keys.(li) <- keys.(li) @ [k];
       values.(li) <- values.(li) @ [v];
@@ -407,16 +409,16 @@ let gpt state tid pid keys values =
       in
       
       (* Residual Connection + FFN *)
-      let x = Tensor.matmul_transposed x_attn l.wo |> Tensor.add x in
+      let x = x_attn |> linear l.wo |> Tensor.add x in
       let mlp_out = 
-        Tensor.rmsnorm x 
-        |> fun xn -> Tensor.matmul_transposed xn l.fc1 
+        x |> Tensor.rmsnorm 
+        |> linear l.fc1 
         |> Tensor.relu 
-        |> fun act -> Tensor.matmul_transposed act l.fc2 
+        |> linear l.fc2 
       in
       apply_layers (Tensor.add x mlp_out) (li + 1)
   in
-  apply_layers x 0 |> fun out -> Tensor.matmul_transposed out state.lm_head
+  apply_layers x 0 |> linear state.lm_head
 
 (* --- Main Execution --- *)
 let main () =
@@ -428,7 +430,7 @@ let main () =
   
   let docs = 
     In_channel.with_open_text "input.txt" In_channel.input_lines
-    |> List.filter (fun s -> s <> "") |> Array.of_list
+    |> List.filter ((<>) "") |> Array.of_list
   in
   let all_chars = 
     String.concat "" (Array.to_list docs) 
