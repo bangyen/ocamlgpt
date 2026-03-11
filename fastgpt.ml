@@ -8,6 +8,11 @@
 
 open Bigarray
 
+let get  = Array2.get
+let set  = Array2.set
+let dim1 = Array2.dim1
+let dim2 = Array2.dim2
+
 (* --- Vectorized Autograd Engine --- *)
 module Tensor = struct
   type t = {
@@ -26,8 +31,8 @@ module Tensor = struct
     (* _backward stores a closure that propagates gradients to children (The "Tape") *)
     { data; grad; _prev = []; _backward = (fun () -> ()); visited = false }
 
-  let entry x r c = Array2.get x.data r c
-  let set_entry x r c v = Array2.set x.data r c v
+  let entry x r c = get x.data r c
+  let set_entry x r c v = set x.data r c v
 
   let backward root =
     let topo = ref [] in
@@ -48,34 +53,34 @@ module Tensor = struct
   let zero_grad x = Array2.fill x.grad 0.0
 
   let add_into out a b =
-    let r, c = Array2.dim1 a.data, Array2.dim2 a.data in
+    let r, c = dim1 a.data, dim2 a.data in
     for i = 0 to r - 1 do
       for j = 0 to c - 1 do
-        Array2.set out.data i j (Array2.get a.data i j +. Array2.get b.data i j)
+        set out.data i j (get a.data i j +. get b.data i j)
       done
     done;
     out._prev <- [a; b];
     out._backward <- (fun () ->
       for i = 0 to r - 1 do
         for j = 0 to c - 1 do
-          let g = Array2.get out.grad i j in
-          Array2.set a.grad i j (Array2.get a.grad i j +. g);
-          Array2.set b.grad i j (Array2.get b.grad i j +. g)
+          let g = get out.grad i j in
+          set a.grad i j (get a.grad i j +. g);
+          set b.grad i j (get b.grad i j +. g)
         done
       done
     )
 
  
   let matmul_transposed_into out a b =
-    let ar, ac = Array2.dim1 a.data, Array2.dim2 a.data in
-    let br, bc = Array2.dim1 b.data, Array2.dim2 b.data in
+    let ar, ac = dim1 a.data, dim2 a.data in
+    let br, bc = dim1 b.data, dim2 b.data in
     for i = 0 to ar - 1 do
       for j = 0 to br - 1 do
         let acc = ref 0.0 in
         for k = 0 to ac - 1 do
-          acc := !acc +. (Array2.get a.data i k *. Array2.get b.data j k)
+          acc := !acc +. (get a.data i k *. get b.data j k)
         done;
-        Array2.set out.data i j !acc
+        set out.data i j !acc
       done
     done;
     out._prev <- [a; b];
@@ -84,37 +89,37 @@ module Tensor = struct
         for k = 0 to ac - 1 do
           let acc = ref 0.0 in
           for j = 0 to br - 1 do
-            acc := !acc +. (Array2.get out.grad i j *. Array2.get b.data j k)
+            acc := !acc +. (get out.grad i j *. get b.data j k)
           done;
-          Array2.set a.grad i k (Array2.get a.grad i k +. !acc)
+          set a.grad i k (get a.grad i k +. !acc)
         done
       done;
       for j = 0 to br - 1 do
         for k = 0 to bc - 1 do
           let acc = ref 0.0 in
           for i = 0 to ar - 1 do
-            acc := !acc +. (Array2.get out.grad i j *. Array2.get a.data i k)
+            acc := !acc +. (get out.grad i j *. get a.data i k)
           done;
-          Array2.set b.grad j k (Array2.get b.grad j k +. !acc)
+          set b.grad j k (get b.grad j k +. !acc)
         done
       done
     )
 
   let matmul_transposed a b = 
-    let ar = Array2.dim1 a.data in 
-    let br = Array2.dim1 b.data in 
+    let ar = dim1 a.data in 
+    let br = dim1 b.data in 
     let out = create ar br in matmul_transposed_into out a b; out
 
   let rmsnorm_into out x =
-    let r, c = Array2.dim1 x.data, Array2.dim2 x.data in
+    let r, c = dim1 x.data, dim2 x.data in
     for i = 0 to r - 1 do
       let ms = ref 0.0 in
       for j = 0 to c - 1 do
-        let v = Array2.get x.data i j in ms := !ms +. (v *. v)
+        let v = get x.data i j in ms := !ms +. (v *. v)
       done;
-      let scale = 1.0 /. sqrt (!ms /. float_of_int c +. 1e-5) in
+      let scale = 1.0 /. sqrt (!ms /. float c +. 1e-5) in
       for j = 0 to c - 1 do
-        Array2.set out.data i j (Array2.get x.data i j *. scale)
+        set out.data i j (get x.data i j *. scale)
       done
     done;
     out._prev <- [x];
@@ -123,113 +128,113 @@ module Tensor = struct
         let ms = ref 0.0 in
         let dot_gx = ref 0.0 in
         for j = 0 to c - 1 do 
-          let v = Array2.get x.data i j in 
+          let v = get x.data i j in 
           ms := !ms +. (v *. v);
-          dot_gx := !dot_gx +. (Array2.get out.grad i j *. v)
+          dot_gx := !dot_gx +. (get out.grad i j *. v)
         done;
-        let m_val = !ms /. float_of_int c +. 1e-5 in
+        let m_val = !ms /. float c +. 1e-5 in
         let scale = 1.0 /. sqrt m_val in
-        let scale3_c = (scale *. scale *. scale) /. float_of_int c in
+        let scale3_c = (scale *. scale *. scale) /. float c in
         for j = 0 to c - 1 do
-          let d_out = Array2.get out.grad i j in
-          let d_x = (d_out *. scale) -. (Array2.get x.data i j *. scale3_c *. !dot_gx) in
-          Array2.set x.grad i j (Array2.get x.grad i j +. d_x)
+          let d_out = get out.grad i j in
+          let d_x = (d_out *. scale) -. (get x.data i j *. scale3_c *. !dot_gx) in
+          set x.grad i j (get x.grad i j +. d_x)
         done
       done
     )
 
   let relu_into out x =
-    let r, c = Array2.dim1 x.data, Array2.dim2 x.data in
+    let r, c = dim1 x.data, dim2 x.data in
     for i = 0 to r - 1 do
       for j = 0 to c - 1 do
-        Array2.set out.data i j (max 0.0 (Array2.get x.data i j))
+        set out.data i j (max 0.0 (get x.data i j))
       done
     done;
     out._prev <- [x];
     out._backward <- (fun () ->
       for i = 0 to r - 1 do
         for j = 0 to c - 1 do
-          if Array2.get x.data i j > 0.0 then
-            Array2.set x.grad i j (Array2.get x.grad i j +. Array2.get out.grad i j)
+          if get x.data i j > 0.0 then
+            set x.grad i j (get x.grad i j +. get out.grad i j)
         done
       done
     )
 
   let softmax_into ?len out x =
-    let r, full_c = Array2.dim1 x.data, Array2.dim2 x.data in
+    let r, full_c = dim1 x.data, dim2 x.data in
     let c = match len with Some l -> l | None -> full_c in
     for i = 0 to r - 1 do
-      let max_v = ref (-. infinity) in
+      let max_v = ref (-.infinity) in
       for j = 0 to c - 1 do
-        let v = Array2.get x.data i j in 
+        let v = get x.data i j in 
         if v > !max_v then max_v := v
       done;
       let sum_exp = ref 0.0 in
       for j = 0 to c - 1 do
-        let v = exp (Array2.get x.data i j -. !max_v) in
-        Array2.set out.data i j v;
+        let v = exp (get x.data i j -. !max_v) in
+        set out.data i j v;
         sum_exp := !sum_exp +. v
       done;
       for j = 0 to c - 1 do
-        Array2.set out.data i j (Array2.get out.data i j /. !sum_exp)
+        set out.data i j (get out.data i j /. !sum_exp)
       done
     done;
     out._prev <- [x];
     out._backward <- (fun () ->
       for i = 0 to r - 1 do
         for j = 0 to c - 1 do
-          let sj = Array2.get out.data i j in
-          let gj = Array2.get out.grad i j in
+          let sj = get out.data i j in
+          let gj = get out.grad i j in
           let sum_sg = ref 0.0 in
           for k = 0 to c - 1 do
-            sum_sg := !sum_sg +. (Array2.get out.data i k *. Array2.get out.grad i k)
+            sum_sg := !sum_sg +. (get out.data i k *. get out.grad i k)
           done;
-          Array2.set x.grad i j (Array2.get x.grad i j +. (sj *. (gj -. !sum_sg)))
+          set x.grad i j (get x.grad i j +. (sj *. (gj -. !sum_sg)))
         done
       done
     )
 
   let slice_row_into out x row =
-    let _, c = Array2.dim1 x.data, Array2.dim2 x.data in
+    let _, c = dim1 x.data, dim2 x.data in
     for j = 0 to c - 1 do
-      Array2.set out.data 0 j (Array2.get x.data row j)
+      set out.data 0 j (get x.data row j)
     done;
     out._prev <- [x];
     out._backward <- (fun () ->
       for j = 0 to c - 1 do
-        Array2.set x.grad row j (Array2.get x.grad row j +. Array2.get out.grad 0 j)
+        set x.grad row j (get x.grad row j +. get out.grad 0 j)
       done
     )
 
   let slice_col_into out x col len =
-    let r, _ = Array2.dim1 x.data, Array2.dim2 x.data in
+    let r, _ = dim1 x.data, dim2 x.data in
     for i = 0 to r - 1 do
       for j = 0 to len - 1 do
-        Array2.set out.data i j (Array2.get x.data i (col + j))
+        set out.data i j (get x.data i (col + j))
       done
     done;
     out._prev <- [x];
     out._backward <- (fun () ->
       for i = 0 to r - 1 do
         for j = 0 to len - 1 do
-          Array2.set x.grad i (col + j) (Array2.get x.grad i (col + j) +. Array2.get out.grad i j)
+          set x.grad i (col + j) (get x.grad i (col + j) +. get out.grad i j)
         done
       done
     )
 
   let dot_product_into out a b =
-    let c = Array2.dim2 a.data in
+    let c = dim2 a.data in
     let acc = ref 0.0 in
     for i = 0 to c - 1 do
-      acc := !acc +. (Array2.get a.data 0 i *. Array2.get b.data 0 i)
+      acc := !acc +. (get a.data 0 i *. get b.data 0 i)
     done;
-    Array2.set out.data 0 0 !acc;
+    set out.data 0 0 !acc;
     out._prev <- [a; b];
     out._backward <- (fun () ->
-      let g = Array2.get out.grad 0 0 in
+      let g = get out.grad 0 0 in
       for i = 0 to c - 1 do
-        Array2.set a.grad 0 i (Array2.get a.grad 0 i +. g *. Array2.get b.data 0 i);
-        Array2.set b.grad 0 i (Array2.get b.grad 0 i +. g *. Array2.get a.data 0 i)
+        set a.grad 0 i (get a.grad 0 i +. g *. get b.data 0 i);
+        set b.grad 0 i (get b.grad 0 i +. g *. get a.data 0 i)
       done
     )
 
@@ -238,56 +243,56 @@ module Tensor = struct
 
   let weighted_sum_into out weights values =
     (* weights: 1xT, values: list of 1xH tensors *)
-    let h = Array2.dim2 out.data in
+    let h = dim2 out.data in
     Array2.fill out.data 0.0;
     List.iteri (fun i v ->
-      let w = Array2.get weights.data 0 i in
+      let w = get weights.data 0 i in
       for j = 0 to h - 1 do
-        Array2.set out.data 0 j (Array2.get out.data 0 j +. w *. Array2.get v.data 0 j)
+        set out.data 0 j (get out.data 0 j +. w *. get v.data 0 j)
       done
     ) values;
     out._prev <- weights :: values;
     out._backward <- (fun () ->
       let g_out = out.grad in
       List.iteri (fun i v ->
-        let w = Array2.get weights.data 0 i in
+        let w = get weights.data 0 i in
         let g_w = ref 0.0 in
         for j = 0 to h - 1 do
-          let gj = Array2.get g_out 0 j in
-          g_w := !g_w +. gj *. Array2.get v.data 0 j;
-          Array2.set v.grad 0 j (Array2.get v.grad 0 j +. w *. gj)
+          let gj = get g_out 0 j in
+          g_w := !g_w +. gj *. get v.data 0 j;
+          set v.grad 0 j (get v.grad 0 j +. w *. gj)
         done;
-        Array2.set weights.grad 0 i (Array2.get weights.grad 0 i +. !g_w)
+        set weights.grad 0 i (get weights.grad 0 i +. !g_w)
       ) values
     )
 
   let weighted_sum weights values =
-    let h = Array2.dim2 (List.hd values).data in
+    let h = dim2 (List.hd values).data in
     let out = create 1 h in weighted_sum_into out weights values; out
 
   let add a b = 
-    let r, c = Array2.dim1 a.data, Array2.dim2 a.data in 
+    let r, c = dim1 a.data, dim2 a.data in 
     let out = create r c in add_into out a b; out
 
 
   let rmsnorm x = 
-    let r, c = Array2.dim1 x.data, Array2.dim2 x.data in 
+    let r, c = dim1 x.data, dim2 x.data in 
     let out = create r c in rmsnorm_into out x; out
 
   let softmax ?len x = 
-    let r, c = Array2.dim1 x.data, Array2.dim2 x.data in 
+    let r, c = dim1 x.data, dim2 x.data in 
     let out = create r c in softmax_into ?len out x; out
 
   let relu x = 
-    let r, c = Array2.dim1 x.data, Array2.dim2 x.data in 
+    let r, c = dim1 x.data, dim2 x.data in 
     let out = create r c in relu_into out x; out
 
   let slice_row x r = 
-    let c = Array2.dim2 x.data in 
+    let c = dim2 x.data in 
     let out = create 1 c in slice_row_into out x r; out
 
   let slice_col x c len = 
-    let r = Array2.dim1 x.data in 
+    let r = dim1 x.data in 
     let out = create r len in slice_col_into out x c len; out
 end
 
@@ -468,16 +473,16 @@ let main () =
   in
   let num_params = 
     List.fold_left (fun acc p -> 
-      acc + (Array2.dim1 p.Tensor.data * Array2.dim2 p.Tensor.data)
+      acc + (dim1 p.Tensor.data * dim2 p.Tensor.data)
     ) 0 params 
   in
   Printf.printf "num params: %d\n" num_params;
   
   let m = List.map (fun p -> 
-    Array2.create Float64 c_layout (Array2.dim1 p.Tensor.data) (Array2.dim2 p.Tensor.data)
+    Array2.create Float64 c_layout (dim1 p.Tensor.data) (dim2 p.Tensor.data)
   ) params in
   let v = List.map (fun p -> 
-    Array2.create Float64 c_layout (Array2.dim1 p.Tensor.data) (Array2.dim2 p.Tensor.data)
+    Array2.create Float64 c_layout (dim1 p.Tensor.data) (dim2 p.Tensor.data)
   ) params in
   
   List.iter (fun mt -> Array2.fill mt 0.0) m;
@@ -551,7 +556,7 @@ let main () =
     let rec update ps m_list v_list =
       match ps, m_list, v_list with
       | p :: pt, mt :: mtt, vt :: vtt ->
-          let r, c = Array2.dim1 p.Tensor.data, Array2.dim2 p.Tensor.data in
+          let r, c = dim1 p.Tensor.data, dim2 p.Tensor.data in
           for ir = 0 to r - 1 do 
             for ic = 0 to c - 1 do
               let g = Array2.get p.Tensor.grad ir ic in

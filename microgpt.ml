@@ -161,19 +161,15 @@ let gpt state token_id pos_id keys values =
 
         let attn_weights = 
           k_h |> List.map (fun kh ->
-            let acc = ref Value.zero in
-            for i = 0 to head_dim - 1 do 
-              acc := !acc +: (q_h.(i) *: kh.(i)) 
-            done;
-            !acc /: Value.scalar (sqrt (float_of_int head_dim))
+            Seq.fold_left2 (fun a b c -> a +: (b *: c))
+              Value.zero (Array.to_seq q_h) (Array.to_seq kh)
+            /: Value.scalar (sqrt (float head_dim))
           ) |> Array.of_list |> softmax
         in
         
-        let acc = ref Value.zero in
-        List.iteri (fun i vhi -> 
-          acc := !acc +: (attn_weights.(i) *: vhi.(hj))
-        ) v_h;
-        !acc
+        List.fold_left2 (fun a weight vhi ->
+          a +: (weight *: vhi.(hj))
+        ) Value.zero (Array.to_list attn_weights) v_h
       ) in
       
       (* Residual Connection + FFN *)
