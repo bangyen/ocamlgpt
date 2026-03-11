@@ -1,12 +1,12 @@
-(* 
+(*
    microgpt.ml - A single-file, zero-dependency GPT-2 implementation in OCaml.
-   Architecture: 
+   Architecture:
    - Autograd: Scalar-valued engine with reverse-mode differentiation.
    - Model: GPT-2 with RMSNorm, Multi-Head Attention, and GELU-like ReLU MLP.
    - Optimizer: Adam with linear learning rate decay.
 *)
 
-(* --- Scalar Autograd Engine --- 
+(* --- Scalar Autograd Engine ---
    This module tracks a computation graph of scalar values to compute gradients via reverse-mode AD.
 *)
 module Value = struct
@@ -38,7 +38,10 @@ module Value = struct
   let div a b = mul a (pow b (-1.0))
   let sub a b = add a (neg b)
 
-  (* Reverse-mode autodiff: traverse the graph in reverse topological order *)
+  (*
+     Reverse-mode autodiff: traverse the
+     graph in reverse topological order
+  *)
   let backward root =
     let rec build v topo =
       if v._visited then topo
@@ -50,11 +53,16 @@ module Value = struct
       end
     in
     let topo = build root [] in
-    root.grad <- 1.0; (* Seed the gradient of the loss with 1.0 *)
+    (* Seed the gradient of the loss with 1.0 *)
+    root.grad <- 1.0;
+    (*
+       Propagate gradients to children using
+       the stored chain rule derivatives
+    *)
     List.iter (fun v ->
-      (* Propagate gradients to children using the stored chain rule derivatives *)
-      List.iter2 (fun child og -> 
-        child.grad <- child.grad +. (og *. v.grad)
+      List.iter2 (fun child og ->
+        child.grad <-
+          child.grad +. (og *. v.grad)
       ) v._prev v._op_grad;
       v._visited <- false
     ) topo
@@ -95,27 +103,27 @@ type layer = {
   fc2 : mat;
 }
 
-type state = { 
-  wte     : mat; 
-  wpe     : mat; 
-  lm_head : mat; 
-  layers  : layer array; 
+type state = {
+  wte     : mat;
+  wpe     : mat;
+  lm_head : mat;
+  layers  : layer array;
 }
 
 (* --- Global Configuration & Vocabulary --- *)
 let () = Random.init 42
 
-let docs = 
+let docs =
   if not (Sys.file_exists "input.txt") then
     ignore (Sys.command "curl -s https://raw.githubusercontent.com/karpathy/makemore/988aa59/names.txt -o input.txt");
   In_channel.with_open_text "input.txt" In_channel.input_lines
-  |> List.filter ((<>) "") 
+  |> List.filter ((<>) "")
   |> Array.of_list
 
-let uchars = 
+let uchars =
   String.concat "" (Array.to_list docs)
-  |> String.to_seq |> List.of_seq 
-  |> List.sort_uniq Char.compare 
+  |> String.to_seq |> List.of_seq
+  |> List.sort_uniq Char.compare
   |> Array.of_list
 
 let vocab_size = Array.length uchars + 1
@@ -132,7 +140,7 @@ let gauss mean std =
     *. cos (2.0 *. Float.pi *. u2)
 
 let matrix ?(std = 0.08) rows cols =
-  Array.init rows (fun _ -> 
+  Array.init rows (fun _ ->
     Array.init cols (fun _ -> Value.scalar (gauss 0.0 std))
   )
 
@@ -146,8 +154,7 @@ let linear w x = Array.map (dot x) w
 let softmax logits =
   let max_val = Array.fold_left (fun m v -> max m (Value.data v)) (-.infinity) logits in
   let exps = Array.map (fun v -> Value.exp (v -: Value.scalar max_val)) logits in
-  let total = sum exps in
-  Array.map (fun e -> e /: total) exps
+  Array.map (fun e -> e /: sum exps) exps
 
 (* Cross-Entropy Loss: -log(p(target)) *)
 let cross_entropy logits target_id =
@@ -180,25 +187,27 @@ let gpt state token_id pos_id keys values =
         x_norm |> linear l.wq,
         x_norm |> linear l.wk,
         x_norm |> linear l.wv in
-      
+
       (* KV Caching: Store previous K/V for autoregressive inference/context *)
       keys.(li) <- keys.(li) @ [k];
       values.(li) <- values.(li) @ [v];
 
       (* Multi-Head Attention *)
-      let x_attn = 
+      let x_attn =
         List.init n_head (fun h ->
           let hs = h * head_dim in
           let q_h = Array.sub q hs head_dim in
           let k_h = List.map (fun ki -> Array.sub ki hs head_dim) keys.(li) in
           let v_h = List.map (fun vi -> Array.sub vi hs head_dim) values.(li) in
-          
-          let attn_weights = 
+
+          let attn_weights =
             k_h |> List.map (fun kh ->
-              dot q_h kh /: Value.scalar (sqrt (float head_dim))
+              dot q_h kh /:
+                Value.scalar
+                (sqrt (float head_dim))
             ) |> Array.of_list |> softmax
           in
-          
+
           Array.init head_dim (fun hj ->
             List.fold_left2 (fun a weight vhi ->
               a +: (weight *: vhi.(hj))
@@ -206,18 +215,21 @@ let gpt state token_id pos_id keys values =
           )
         ) |> Array.concat
       in
-      
+
       (* Residual Connection + FFN *)
-      let x = x_attn |> linear l.wo |> ( +^ ) x in
-      let mlp_out = 
-        x |> rmsnorm 
-        |> linear l.fc1 
-        |> relu 
+      let x = x_attn
+        |> linear l.wo |> ( +^ ) x in
+      let mlp_out =
+        x |> rmsnorm
+        |> linear l.fc1
+        |> relu
         |> linear l.fc2
       in
-      apply_layers (x +^ mlp_out) (li + 1)
+      apply_layers
+        (x +^ mlp_out) (li + 1)
   in
-  apply_layers x 0 |> linear state.lm_head
+  apply_layers x 0
+    |> linear state.lm_head
 
 (* --- Optimization Ops --- *)
 
@@ -233,7 +245,9 @@ let step_adam params m v step =
     v.(i) <- beta2 *. v.(i) +. (1.0 -. beta2) *. (g *. g);
     let m_hat = m.(i) /. b1_t in
     let v_hat = v.(i) /. b2_t in
-    let delta = lr_t *. m_hat /. (sqrt v_hat +. eps_adam) in
+    let delta = lr_t *. m_hat /.
+      (sqrt v_hat +. eps_adam) in
+
     Value.set_data p (Value.data p -. delta);
     Value.set_grad p 0.0
   ) params
@@ -266,15 +280,15 @@ let main () =
       [l.wq; l.wk; l.wv; l.wo; l.fc1; l.fc2]
     in
     List.concat [
-      flatten s.wte; 
-      flatten s.wpe; 
-      flatten s.lm_head; 
+      flatten s.wte;
+      flatten s.wpe;
+      flatten s.lm_head;
       List.concat_map
         layer_params
         (Array.to_list s.layers)
     ]
   in
-  
+
   let params_arr = Array.of_list (collect_params state) in
   Printf.printf "num params: %d\n" (Array.length params_arr);
 
@@ -282,13 +296,13 @@ let main () =
   let m = Array.make (Array.length params_arr) 0.0 in
   let v = Array.make (Array.length params_arr) 0.0 in
 
-  let docs_shuffled = 
+  let docs_shuffled =
     let a = Array.copy docs in
     for i = Array.length a - 1 downto 1 do
       let t = a.(i) in
       let j = Random.int (i + 1) in
         a.(i) <- a.(j); a.(j) <- t
-    done; 
+    done;
     a
   in
 
@@ -297,21 +311,26 @@ let main () =
     else begin
       let ind = step mod Array.length docs_shuffled in
       let doc = docs_shuffled.(ind) in
-      let tokens = 
-        [bos_token] @ (String.to_seq doc |> Seq.map (fun c ->
-          let rec find i = if uchars.(i) = c then i else find (i + 1) in find 0
-        ) |> List.of_seq) @ [bos_token] 
+      let tokens =
+        [bos_token] @ (String.to_seq doc
+          |> Seq.map (fun c ->
+            let rec find i =
+              if uchars.(i) = c then i
+              else find (i + 1) in find 0
+        ) |> List.of_seq) @ [bos_token]
       in
       let keys   = Array.make n_layer [] in
       let values = Array.make n_layer [] in
       let rec zip_loss pos_id = function
-        | t1 :: t2 :: ts when pos_id < block_size ->
-            let l = cross_entropy (gpt state t1 pos_id keys values) t2 in
+        | t1 :: t2 :: ts
+          when pos_id < block_size ->
+            let l = cross_entropy
+              (gpt state t1 pos_id keys values) t2 in
             l :: zip_loss (pos_id + 1) (t2 :: ts)
         | _ -> []
       in
       let losses = zip_loss 0 tokens in
-      
+
       let n = List.length losses in
       let total_loss = losses |> Array.of_list |> sum in
       let avg_loss = total_loss /: (Value.scalar (float_of_int n)) in
@@ -321,8 +340,9 @@ let main () =
 
       Printf.printf
         "step %4d / %4d | loss %.4f\r%!"
-        (step + 1) num_steps (Value.data avg_loss);
-      
+        (step + 1) num_steps
+        (Value.data avg_loss);
+
       train_loop (step + 1)
     end
   in
@@ -334,14 +354,15 @@ let main () =
   let rec infer_loop sample_idx =
     if sample_idx > 20 then ()
     else begin
-      let keys     = Array.make n_layer [] in
-      let values   = Array.make n_layer [] in
+      let keys   = Array.make n_layer [] in
+      let values = Array.make n_layer [] in
       let rec generate pos_id tid acc_tokens =
         if pos_id >= block_size then acc_tokens
         else
-          let scaled_logits = 
+          let scaled_logits =
             Array.map
-              (fun v -> Value.scalar (Value.data v /. temperature))
+              (fun v -> Value.scalar
+                (Value.data v /. temperature))
               (gpt state tid pos_id keys values)
           in
           let probs = softmax scaled_logits in

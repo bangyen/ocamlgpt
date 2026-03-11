@@ -24,14 +24,14 @@ def patch_python(content):
 def patch_ocaml(content):
     content = re.sub(r'gauss\s+0\.0\s+std', '0.02', content)
     content = re.sub(r'let gauss.*?\(2\.0 \*\. Float\.pi \*\. u2\)', 'let gauss mean std = 0.02', content, flags=re.DOTALL)
-    
+
     # Disable shuffle by turning it into identity
     content = re.sub(r'let a = Array\.copy docs in.*?a\s+in', 'let a = docs in\n    a\n  in', content, flags=re.DOTALL)
-    
+
     content = re.sub(r'let num_steps\s*=\s*\d+', 'let num_steps = 10', content)
     content = content.replace('%.4f', '%.8f')
     content = content.replace('\\r%!', '\\n%!')
-    
+
     # Deterministic sampling
     content = re.sub(r'let next_id = sample_prob 0 0\.0 in', 'let next_id = 0 in', content)
     return content
@@ -42,7 +42,7 @@ def run_output(cmd):
         print(f"Error running command: {cmd}")
         print(result.stderr)
         return [], []
-    
+
     losses = []
     samples = []
     for line in result.stdout.split('\n'):
@@ -68,7 +68,7 @@ def main():
         f.write(patch_ocaml(ml_content))
 
     py_losses, py_samples = run_output("python3 ref.py")
-    
+
     # Using -w -40 to ignore some warnings during patching if any
     subprocess.run("ocamlopt -w -40-26 -o micro_test_bin micro_test.ml", shell=True, check=True)
     ml_losses, ml_samples = run_output("./micro_test_bin")

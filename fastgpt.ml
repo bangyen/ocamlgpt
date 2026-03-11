@@ -1,6 +1,6 @@
-(* 
+(*
    fastgpt.ml - Hyper-optimized, parallelized GPT-2 implementation in OCaml.
-   
+
    Performance-oriented design:
    - Taped Autograd: Vectorized engine using Bigarrays and closure-based "tapes".
    - Parallelism: Native OCaml 5 Domain pool for multi-core scaling.
@@ -71,7 +71,7 @@ module Tensor = struct
       done
     )
 
- 
+
   let matmul_transposed_into out a b =
     let ar, ac = dim1 a.data, dim2 a.data in
     let br, bc = dim1 b.data, dim2 b.data in
@@ -106,9 +106,9 @@ module Tensor = struct
       done
     )
 
-  let matmul_transposed a b = 
-    let ar = dim1 a.data in 
-    let br = dim1 b.data in 
+  let matmul_transposed a b =
+    let ar = dim1 a.data in
+    let br = dim1 b.data in
     let out = create ar br in matmul_transposed_into out a b; out
 
   let rmsnorm_into out x =
@@ -128,8 +128,8 @@ module Tensor = struct
       for i = 0 to r - 1 do
         let ms = ref 0.0 in
         let dot_gx = ref 0.0 in
-        for j = 0 to c - 1 do 
-          let v = get x.data i j in 
+        for j = 0 to c - 1 do
+          let v = get x.data i j in
           ms := !ms +. (v *. v);
           dot_gx := !dot_gx +. (get out.grad i j *. v)
         done;
@@ -167,7 +167,7 @@ module Tensor = struct
     for i = 0 to r - 1 do
       let max_v = ref (-.infinity) in
       for j = 0 to c - 1 do
-        let v = get x.data i j in 
+        let v = get x.data i j in
         if v > !max_v then max_v := v
       done;
       let sum_exp = ref 0.0 in
@@ -271,13 +271,13 @@ module Tensor = struct
     let h = dim2 (List.hd values).data in
     let out = create 1 h in weighted_sum_into out weights values; out
 
-  let add a b = 
-    let r, c = dim1 a.data, dim2 a.data in 
+  let add a b =
+    let r, c = dim1 a.data, dim2 a.data in
     let out = create r c in add_into out a b; out
 
 
-  let rmsnorm x = 
-    let r, c = dim1 x.data, dim2 x.data in 
+  let rmsnorm x =
+    let r, c = dim1 x.data, dim2 x.data in
     let out = create r c in rmsnorm_into out x; out
 
   let cross_entropy_into out logits target =
@@ -333,20 +333,20 @@ module Tensor = struct
     let r, c = dim1 x.data, dim2 x.data in
     let out = create r c in mul_scalar_into out x s; out
 
-  let softmax ?len x = 
-    let r, c = dim1 x.data, dim2 x.data in 
+  let softmax ?len x =
+    let r, c = dim1 x.data, dim2 x.data in
     let out = create r c in softmax_into ?len out x; out
 
-  let relu x = 
-    let r, c = dim1 x.data, dim2 x.data in 
+  let relu x =
+    let r, c = dim1 x.data, dim2 x.data in
     let out = create r c in relu_into out x; out
 
-  let slice_row x r = 
-    let c = dim2 x.data in 
+  let slice_row x r =
+    let c = dim2 x.data in
     let out = create 1 c in slice_row_into out x r; out
 
-  let slice_col x c len = 
-    let r = dim1 x.data in 
+  let slice_col x c len =
+    let r = dim1 x.data in
     let out = create r len in slice_col_into out x c len; out
 
   let stack_scalars_into out xs =
@@ -382,26 +382,26 @@ module Tensor = struct
   let concat_cols xs =
     let h = dim2 (List.hd xs).data in
     let out = create 1 (List.length xs * h) in concat_cols_into out xs; out
-    
+
   let step_adam params m_list v_list step learning_rate num_steps beta1 beta2 eps =
     let lr_t = learning_rate *. (1.0 -. (float_of_int step /. float_of_int num_steps)) in
     let rec update ps m v =
       match ps, m, v with
       | p :: pt, mt :: mtt, vt :: vtt ->
           let r, c = dim1 p.data, dim2 p.data in
-          for ir = 0 to r - 1 do 
+          for ir = 0 to r - 1 do
             for ic = 0 to c - 1 do
               let g = Array2.get p.grad ir ic in
               let m_val = beta1 *. Array2.get mt ir ic +. (1.0 -. beta1) *. g in
               let v_val = beta2 *. Array2.get vt ir ic +. (1.0 -. beta2) *. (g *. g) in
-              Array2.set mt ir ic m_val; 
+              Array2.set mt ir ic m_val;
               Array2.set vt ir ic v_val;
               let m_hat = m_val /. (1.0 -. (beta1 ** float_of_int (step + 1))) in
               let v_hat = v_val /. (1.0 -. (beta2 ** float_of_int (step + 1))) in
               let old_d = Array2.get p.data ir ic in
               Array2.set p.data ir ic (old_d -. lr_t *. m_hat /. (sqrt v_hat +. eps));
               Array2.set p.grad ir ic 0.0
-            done 
+            done
           done;
           update pt mtt vtt
       | _ -> ()
@@ -416,16 +416,16 @@ let beta1, beta2, eps = 0.85, 0.99, 1e-8
 
 let () = Random.init 42
 
-let docs = 
+let docs =
   if not (Sys.file_exists "input.txt") then
     ignore (Sys.command "curl -s https://raw.githubusercontent.com/karpathy/makemore/988aa59/names.txt -o input.txt");
   In_channel.with_open_text "input.txt" In_channel.input_lines
   |> List.filter ((<>) "") |> Array.of_list
 
-let uchars = 
-  String.concat "" (Array.to_list docs) 
-  |> String.to_seq |> List.of_seq 
-  |> List.sort_uniq Char.compare 
+let uchars =
+  String.concat "" (Array.to_list docs)
+  |> String.to_seq |> List.of_seq
+  |> List.sort_uniq Char.compare
   |> Array.of_list
 
 let vocab_size = Array.length uchars + 1
@@ -433,19 +433,19 @@ let bos_token = Array.length uchars
 
 (* --- Model State --- *)
 type layer = {
-  wq : Tensor.t; 
-  wk : Tensor.t; 
-  wv : Tensor.t; 
+  wq : Tensor.t;
+  wk : Tensor.t;
+  wv : Tensor.t;
   wo : Tensor.t;
-  fc1 : Tensor.t; 
+  fc1 : Tensor.t;
   fc2 : Tensor.t;
 }
 
-type state = { 
-  wte : Tensor.t; 
-  wpe : Tensor.t; 
-  lm_head : Tensor.t; 
-  layers : layer array; 
+type state = {
+  wte : Tensor.t;
+  wpe : Tensor.t;
+  lm_head : Tensor.t;
+  layers : layer array;
 }
 
 (* --- Initialization Helpers --- *)
@@ -469,39 +469,39 @@ let gpt state tid pid keys values =
     else
       let l = state.layers.(li) in
       let x_norm = Tensor.rmsnorm x in
-      let q, k, v = 
-        linear l.wq x_norm, 
-        linear l.wk x_norm, 
+      let q, k, v =
+        linear l.wq x_norm,
+        linear l.wk x_norm,
         linear l.wv x_norm
       in
       keys.(li) <- keys.(li) @ [k];
       values.(li) <- values.(li) @ [v];
 
       (* Multi-Head Attention *)
-      let x_attn = 
+      let x_attn =
         List.init n_head (fun h ->
           let hs = h * head_dim in
           let q_h = Tensor.slice_col q hs head_dim in
           let k_h = List.map (fun ki -> Tensor.slice_col ki hs head_dim) keys.(li) in
           let v_h = List.map (fun vi -> Tensor.slice_col vi hs head_dim) values.(li) in
-          
+
           let scale_factor = 1.0 /. sqrt (float_of_int head_dim) in
-          k_h 
+          k_h
           |> List.map (fun kh -> Tensor.mul_scalar (Tensor.dot_product q_h kh) scale_factor)
-          |> Tensor.stack_scalars 
+          |> Tensor.stack_scalars
           |> Tensor.softmax
           |> fun w -> Tensor.weighted_sum w v_h
-        ) 
+        )
         |> Tensor.concat_cols
       in
-      
+
       (* Residual Connection + FFN *)
       let x = x_attn |> linear l.wo |> ( +^ ) x in
-      let mlp_out = 
-        x |> Tensor.rmsnorm 
-        |> linear l.fc1 
-        |> Tensor.relu 
-        |> linear l.fc2 
+      let mlp_out =
+        x |> Tensor.rmsnorm
+        |> linear l.fc1
+        |> Tensor.relu
+        |> linear l.fc2
       in
       apply_layers (x +^ mlp_out) (li + 1)
   in
@@ -512,16 +512,16 @@ let main () =
   Printf.printf "num docs: %d\n" (Array.length docs);
   Printf.printf "vocab size: %d\n" vocab_size;
 
-  let mat r c = 
+  let mat r c =
     let t = Tensor.create r c in
-    for i = 0 to r - 1 do 
-      for j = 0 to c - 1 do 
-        Tensor.set_entry t i j (gauss 0.0 0.08) 
-      done 
+    for i = 0 to r - 1 do
+      for j = 0 to c - 1 do
+        Tensor.set_entry t i j (gauss 0.0 0.08)
+      done
     done;
     t
   in
-  
+
   (* 2. Initialize Model *)
   let state = {
     wte = mat vocab_size n_embd;
@@ -537,33 +537,33 @@ let main () =
     });
   } in
 
-  let params = 
-    [state.wte; state.wpe; state.lm_head] @ 
+  let params =
+    [state.wte; state.wpe; state.lm_head] @
     (Array.to_list state.layers |> List.concat_map (fun l -> [l.wq; l.wk; l.wv; l.wo; l.fc1; l.fc2]))
   in
-  let num_params = 
-    List.fold_left (fun acc p -> 
+  let num_params =
+    List.fold_left (fun acc p ->
       acc + (dim1 p.Tensor.data * dim2 p.Tensor.data)
-    ) 0 params 
+    ) 0 params
   in
   Printf.printf "num params: %d\n" num_params;
-  
-  let m = List.map (fun p -> 
+
+  let m = List.map (fun p ->
     Array2.create Float64 c_layout (dim1 p.Tensor.data) (dim2 p.Tensor.data)
   ) params in
-  let v = List.map (fun p -> 
+  let v = List.map (fun p ->
     Array2.create Float64 c_layout (dim1 p.Tensor.data) (dim2 p.Tensor.data)
   ) params in
-  
+
   List.iter (fun mt -> Array2.fill mt 0.0) m;
   List.iter (fun vt -> Array2.fill vt 0.0) v;
 
-  let docs_shuffled = 
+  let docs_shuffled =
     let a = Array.copy docs in
     for i = Array.length a - 1 downto 1 do
       let j = Random.int (i + 1) in
       let t = a.(i) in a.(i) <- a.(j); a.(j) <- t
-    done; 
+    done;
     a
   in
 
@@ -608,8 +608,8 @@ let main () =
         if pos_id > 14 then acc_tokens
         else
           let logits = gpt state tid pos_id keys values in
-          for j = 0 to vocab_size - 1 do 
-            Tensor.set_entry logits 0 j (Tensor.entry logits 0 j /. 0.5) 
+          for j = 0 to vocab_size - 1 do
+            Tensor.set_entry logits 0 j (Tensor.entry logits 0 j /. 0.5)
           done;
           let probs = Tensor.softmax logits in
           let r = Random.float 1.0 in
@@ -619,14 +619,14 @@ let main () =
             if r <= cum then i else sample_prob (i + 1) cum
           in
           let next_id = sample_prob 0 0.0 in
-          if next_id = bos_token then acc_tokens 
+          if next_id = bos_token then acc_tokens
           else gen (pos_id + 1) next_id (acc_tokens @ [next_id]) keys values
       in
       let keys, values = Array.make n_layer [], Array.make n_layer [] in
       let tokens = gen 0 bos_token [] keys values in
-      let name = 
-        List.filter (fun t -> t <> bos_token) tokens 
-        |> List.map (fun t -> uchars.(t)) |> List.to_seq |> String.of_seq 
+      let name =
+        List.filter (fun t -> t <> bos_token) tokens
+        |> List.map (fun t -> uchars.(t)) |> List.to_seq |> String.of_seq
       in
       Printf.printf "sample %2d: %s\n" i name;
       infer_loop (i + 1)
