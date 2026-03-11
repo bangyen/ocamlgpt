@@ -421,15 +421,10 @@ let main () =
   if not (Sys.file_exists "input.txt") then
     ignore (Sys.command "curl -s https://raw.githubusercontent.com/karpathy/makemore/988aa59/names.txt -o input.txt");
   
-  let ic = open_in "input.txt" in
-  let rec read acc =
-    try
-      let line = input_line ic in
-      read (if line <> "" then line :: acc else acc)
-    with End_of_file -> close_in ic; List.rev acc
+  let docs = 
+    In_channel.with_open_text "input.txt" In_channel.input_lines
+    |> List.filter (fun s -> s <> "") |> Array.of_list
   in
-  
-  let docs = Array.of_list (read []) in
   let all_chars = 
     String.concat "" (Array.to_list docs) 
     |> String.to_seq |> List.of_seq 
