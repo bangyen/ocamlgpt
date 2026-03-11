@@ -144,11 +144,13 @@ let softmax logits =
   let total = Array.fold_left (+:) Value.zero exps in
   Array.map (fun e -> e /: total) exps
 
+(* ReLU Activation: max(0, x) *)
+let relu = Array.map Value.relu
+
 (* RMSNorm: x / sqrt(mean(x^2) + eps) *)
 let rmsnorm x =
-  let ms    = Array.fold_left (fun a xi -> a +: (xi *: xi)) Value.zero x in
-  let base  = ms /: Value.scalar (float (Array.length x)) +: Value.scalar 1e-5 in
-  let scale = Value.pow base (-0.5) in
+  let ms    = dot x x /: Value.scalar (float (Array.length x)) in
+  let scale = Value.pow (ms +: Value.scalar 1e-5) (-0.5) in
   Array.map (fun xi -> xi *: scale) x
 
 (* --- GPT Forward Pass --- *)
@@ -191,7 +193,7 @@ let gpt state token_id pos_id keys values =
       let mlp_out = 
         x |> rmsnorm 
         |> linear l.fc1 
-        |> Array.map Value.relu 
+        |> relu 
         |> linear l.fc2
       in
       apply_layers (x +^ mlp_out) (li + 1)
