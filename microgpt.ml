@@ -66,6 +66,7 @@ end
 
 (* Operator aliases for convenience *)
 let ( +: ), ( -: ), ( *: ), ( /: ) = Value.add, Value.sub, Value.mul, Value.div
+let ( +^ ) = Array.map2 (+:)
 
 (* --- Configuration --- *)
 let n_layer       = 1               (* Number of transformer blocks *)
@@ -137,7 +138,7 @@ let rmsnorm x =
 
 (* --- GPT Forward Pass --- *)
 let gpt state token_id pos_id keys values =
-  let x = Array.map2 (+:) state.wte.(token_id) state.wpe.(pos_id) |> rmsnorm in
+  let x = state.wte.(token_id) +^ state.wpe.(pos_id) |> rmsnorm in
 
   let rec apply_layers x li =
     if li = n_layer then x
@@ -173,14 +174,14 @@ let gpt state token_id pos_id keys values =
       ) in
       
       (* Residual Connection + FFN *)
-      let x = Array.map2 (+:) x (x_attn |> linear l.wo) in
+      let x = x +^ (x_attn |> linear l.wo) in
       let mlp_out = 
         x |> rmsnorm 
         |> linear l.fc1 
         |> Array.map Value.relu 
         |> linear l.fc2
       in
-      apply_layers (Array.map2 (+:) x mlp_out) (li + 1)
+      apply_layers (x +^ mlp_out) (li + 1)
   in
   apply_layers x 0 |> linear state.lm_head
 

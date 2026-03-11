@@ -326,12 +326,13 @@ let gauss mean std =
   mean +. std *. sqrt (-2.0 *. log u1) *. cos (2.0 *. Float.pi *. u2)
 
 let linear w x = Tensor.matmul_transposed x w
+let ( +^ ) = Tensor.add
 
 (* --- GPT Forward Pass --- *)
 let gpt state tid pid keys values =
   let tok_emb = Tensor.slice_row state.wte tid in
   let pos_emb = Tensor.slice_row state.wpe pid in
-  let x = Tensor.add tok_emb pos_emb |> Tensor.rmsnorm in
+  let x = tok_emb +^ pos_emb |> Tensor.rmsnorm in
 
   let rec apply_layers x li =
     if li = n_layer then x
@@ -407,14 +408,14 @@ let gpt state tid pid keys values =
       in
       
       (* Residual Connection + FFN *)
-      let x = x_attn |> linear l.wo |> Tensor.add x in
+      let x = x_attn |> linear l.wo |> ( +^ ) x in
       let mlp_out = 
         x |> Tensor.rmsnorm 
         |> linear l.fc1 
         |> Tensor.relu 
         |> linear l.fc2 
       in
-      apply_layers (Tensor.add x mlp_out) (li + 1)
+      apply_layers (x +^ mlp_out) (li + 1)
   in
   apply_layers x 0 |> linear state.lm_head
 
