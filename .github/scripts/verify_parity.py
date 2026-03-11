@@ -29,14 +29,14 @@ def patch_ocaml(content):
     content = re.sub(r'let gauss.*?\(2\.0 \*\. Float\.pi \*\. u2\)', 'let gauss mean std = 0.02', content, flags=re.DOTALL)
     
     # Disable shuffle by turning it into identity
-    content = re.sub(r'let shuffle l =\s*.*?\s+in\s+Array\.of_list \(shuffle d\)', 'let shuffle l = l in\n    Array.of_list (shuffle d)', content, flags=re.DOTALL)
+    content = re.sub(r'let a = Array\.copy docs in.*?a\s+in', 'let a = docs in\n    a\n  in', content, flags=re.DOTALL)
     
     content = re.sub(r'let num_steps\s*=\s*\d+', 'let num_steps = 10', content)
     content = content.replace('%.4f', '%.8f')
     content = content.replace('\\r%!', '\\n%!')
     
     # Deterministic sampling
-    content = re.sub(r'token_id\s*:=\s*!selected_idx', 'token_id := 0', content)
+    content = re.sub(r'token_id\s*:=\s*sample_prob\s+0\s+0\.0', 'token_id := 0', content)
     return content
 
 def run_output(cmd):

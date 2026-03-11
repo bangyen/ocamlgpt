@@ -489,27 +489,19 @@ let main () =
   List.iter (fun vt -> Array2.fill vt 0.0) v;
 
   let docs_shuffled = 
-    let d = Array.to_list docs in
-    let shuffle l = 
-      let a = Array.of_list l in
-      for i = Array.length a - 1 downto 1 do
-        let j = Random.int (i + 1) in
-        let temp = a.(i) in a.(i) <- a.(j); a.(j) <- temp
-      done; 
-      Array.to_list a
-    in 
-    Array.of_list (shuffle d)
+    let a = Array.copy docs in
+    for i = Array.length a - 1 downto 1 do
+      let j = Random.int (i + 1) in
+      let t = a.(i) in a.(i) <- a.(j); a.(j) <- t
+    done; 
+    a
   in
 
   (* 3. Training Loop *)
   for step = 0 to num_steps - 1 do
     let doc = docs_shuffled.(step mod Array.length docs_shuffled) in
     let tokens = [bos_token] @ (String.to_seq doc |> Seq.map (fun c ->
-      let i = ref 0 in 
-      while !i < Array.length uchars && uchars.(!i) <> c do 
-        incr i 
-      done; 
-      !i
+      let rec find i = if uchars.(i) = c then i else find (i + 1) in find 0
     ) |> List.of_seq) @ [bos_token] in
     let n = min block_size (List.length tokens - 1) in
     
@@ -593,15 +585,14 @@ let main () =
         done;
         let probs = Tensor.softmax logits in
         let r = Random.float 1.0 in
-        let acc, next_id, found = ref 0.0, ref bos_token, ref false in
-        for j = 0 to vocab_size - 1 do
-          if not !found then (
-            acc := !acc +. Tensor.entry probs 0 j;
-            if r <= !acc then (next_id := j; found := true)
-          )
-        done;
-        if !next_id = bos_token then tokens 
-        else gen (tokens @ [!next_id]) keys values
+        let rec sample_prob i cum =
+          if i >= vocab_size then bos_token else
+          let cum = cum +. Tensor.entry probs 0 i in
+          if r <= cum then i else sample_prob (i + 1) cum
+        in
+        let next_id = sample_prob 0 0.0 in
+        if next_id = bos_token then tokens 
+        else gen (tokens @ [next_id]) keys values
     in
     let keys, values = Array.make n_layer [], Array.make n_layer [] in
     let tokens = gen [bos_token] keys values in

@@ -249,27 +249,19 @@ let main () =
   let v = Array.make (Array.length params_arr) 0.0 in
 
   let docs_shuffled = 
-    let d = Array.to_list docs in
-    let shuffle l = 
-      let a = Array.of_list l in
-      for i = Array.length a - 1 downto 1 do
-        let j = Random.int (i + 1) in
-        let temp = a.(i) in a.(i) <- a.(j); a.(j) <- temp
-      done; 
-      Array.to_list a
-    in 
-    Array.of_list (shuffle d)
+    let a = Array.copy docs in
+    for i = Array.length a - 1 downto 1 do
+      let j = Random.int (i + 1) in
+      let t = a.(i) in a.(i) <- a.(j); a.(j) <- t
+    done; 
+    a
   in
 
   for step = 0 to num_steps - 1 do
     let doc = docs_shuffled.(step mod Array.length docs_shuffled) in
     let tokens = 
       [!bos_token] @ (String.to_seq doc |> Seq.map (fun c ->
-        let idx = ref 0 in
-        while !idx < Array.length !uchars && !uchars.(!idx) <> c do 
-          incr idx 
-        done;
-        !idx
+        let rec find i = if !uchars.(i) = c then i else find (i + 1) in find 0
       ) |> List.of_seq) @ [!bos_token] 
     in
     let n = min block_size (List.length tokens - 1) in
@@ -328,16 +320,12 @@ let main () =
         in
         let probs = softmax scaled_logits in
         let r = Random.float 1.0 in
-        let cumulative_prob = ref 0.0 in
-        let selected_idx = ref !bos_token in
-        let found = ref false in
-        Array.iteri (fun i p ->
-          if not !found then begin
-            cumulative_prob := !cumulative_prob +. Value.data p;
-            if r <= !cumulative_prob then (selected_idx := i; found := true)
-          end
-        ) probs;
-        token_id := !selected_idx;
+        let rec sample_prob i cum =
+          if i >= !vocab_size then !bos_token else
+          let cum = cum +. Value.data probs.(i) in
+          if r <= cum then i else sample_prob (i + 1) cum
+        in
+        token_id := sample_prob 0 0.0;
         if !token_id <> !bos_token then begin
           sample := !sample @ [!uchars.(!token_id)]; 
           generate (pos_id + 1)
