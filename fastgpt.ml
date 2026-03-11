@@ -35,20 +35,20 @@ module Tensor = struct
   let set_entry x r c v = set x.data r c v
 
   let backward root =
-    let topo = ref [] in
-    let rec build v =
-      if not v.visited then begin
-        v.visited <- true; 
-        List.iter build v._prev; 
-        topo := v :: !topo
+    let rec build v topo =
+      if v.visited then topo
+      else begin
+        v.visited <- true;
+        let topo' = List.fold_left (fun acc child -> build child acc) topo v._prev in
+        v :: topo'
       end
     in
-    build root;
+    let topo = build root [] in
     root.visited <- false;
     List.iter (fun v ->
       v._backward ();
       v.visited <- false
-    ) !topo
+    ) topo
 
   let zero_grad x = Array2.fill x.grad 0.0
 
@@ -348,8 +348,7 @@ let gpt state tid pid keys values =
 
       (* Multi-Head Attention *)
       let x_attn = 
-        let heads = ref [] in
-        for h = 0 to n_head - 1 do
+        let hs = List.init n_head (fun h ->
           let hs = h * head_dim in
           let q_h = Tensor.slice_col q hs head_dim in
           let k_h = List.map (fun ki -> Tensor.slice_col ki hs head_dim) keys.(li) in
@@ -384,10 +383,9 @@ let gpt state tid pid keys values =
           );
           
           let attn_weights = Tensor.softmax attn_logits in
-          heads := Tensor.weighted_sum attn_weights v_h :: !heads
-        done;
+          Tensor.weighted_sum attn_weights v_h
+        ) in
         
-        let hs = List.rev !heads in
         let out = Tensor.create 1 n_embd in
         List.iteri (fun h (h_tensor : Tensor.t) ->
           for j = 0 to head_dim - 1 do
