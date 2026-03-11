@@ -498,111 +498,118 @@ let main () =
     a
   in
 
-  (* 3. Training Loop *)
-  for step = 0 to num_steps - 1 do
-    let doc = docs_shuffled.(step mod Array.length docs_shuffled) in
-    let tokens = [bos_token] @ (String.to_seq doc |> Seq.map (fun c ->
-      let rec find i = if uchars.(i) = c then i else find (i + 1) in find 0
-    ) |> List.of_seq) @ [bos_token] in
-    let n = min block_size (List.length tokens - 1) in
-    
-    (* Reset gradients *)
-    List.iter Tensor.zero_grad params;
+  let rec train_loop step =
+    if step >= num_steps then ()
+    else begin
+      let doc = docs_shuffled.(step mod Array.length docs_shuffled) in
+      let tokens = [bos_token] @ (String.to_seq doc |> Seq.map (fun c ->
+        let rec find i = if uchars.(i) = c then i else find (i + 1) in find 0
+      ) |> List.of_seq) @ [bos_token] in
+      let n = min block_size (List.length tokens - 1) in
+      
+      (* Reset gradients *)
+      List.iter Tensor.zero_grad params;
 
-    let keys, values = Array.make n_layer [], Array.make n_layer [] in
+      let keys, values = Array.make n_layer [], Array.make n_layer [] in
 
-    let losses = 
-      List.init n (fun pos_id ->
-        let tid, target = List.nth tokens pos_id, List.nth tokens (pos_id + 1) in
-        let logits = gpt state tid pos_id keys values in
-        let probs = Tensor.softmax logits in
-        let loss_val = -. log (Tensor.entry probs 0 target +. 1e-10) in
-        let node = Tensor.create 1 1 in 
-        Tensor.set_entry node 0 0 loss_val;
-        node.Tensor._prev <- [logits];
-        node.Tensor._backward <- (fun () ->
-          let g = Array2.get node.Tensor.grad 0 0 in
-          for i = 0 to vocab_size - 1 do
-            let si = Tensor.entry probs 0 i in
-            let delta = if i = target then si -. 1.0 else si in
-            let old_g = Array2.get logits.Tensor.grad 0 i in
-            Array2.set logits.Tensor.grad 0 i (old_g +. g *. delta)
-          done
-        );
-        node
-      )
-    in
+      let losses = 
+        List.init n (fun pos_id ->
+          let tid, target = List.nth tokens pos_id, List.nth tokens (pos_id + 1) in
+          let logits = gpt state tid pos_id keys values in
+          let probs = Tensor.softmax logits in
+          let loss_val = -. log (Tensor.entry probs 0 target +. 1e-10) in
+          let node = Tensor.create 1 1 in 
+          Tensor.set_entry node 0 0 loss_val;
+          node.Tensor._prev <- [logits];
+          node.Tensor._backward <- (fun () ->
+            let g = Array2.get node.Tensor.grad 0 0 in
+            for i = 0 to vocab_size - 1 do
+              let si = Tensor.entry probs 0 i in
+              let delta = if i = target then si -. 1.0 else si in
+              let old_g = Array2.get logits.Tensor.grad 0 i in
+              Array2.set logits.Tensor.grad 0 i (old_g +. g *. delta)
+            done
+          );
+          node
+        )
+      in
 
-    let avg_loss_node = Tensor.create 1 1 in
-    let total_loss_val = List.fold_left (fun acc l -> acc +. Tensor.entry l 0 0) 0.0 losses in
-    Tensor.set_entry avg_loss_node 0 0 (total_loss_val /. float_of_int n);
-    avg_loss_node.Tensor._prev <- losses;
-    avg_loss_node.Tensor._backward <- (fun () ->
-      List.iter (fun (l : Tensor.t) -> 
-        Array2.set l.grad 0 0 (1.0 /. float_of_int n)
-      ) losses
-    );
-    Tensor.backward avg_loss_node;
-    let avg_loss = total_loss_val /. float_of_int n in
+      let avg_loss_node = Tensor.create 1 1 in
+      let total_loss_val = List.fold_left (fun acc l -> acc +. Tensor.entry l 0 0) 0.0 losses in
+      Tensor.set_entry avg_loss_node 0 0 (total_loss_val /. float_of_int n);
+      avg_loss_node.Tensor._prev <- losses;
+      avg_loss_node.Tensor._backward <- (fun () ->
+        List.iter (fun (l : Tensor.t) -> 
+          Array2.set l.grad 0 0 (1.0 /. float_of_int n)
+        ) losses
+      );
+      Tensor.backward avg_loss_node;
+      let avg_loss = total_loss_val /. float_of_int n in
 
-    (* Adam Update Matching microgpt.ml *)
-    let lr_t = learning_rate *. (1.0 -. (float_of_int step /. float_of_int num_steps)) in
-    let rec update ps m_list v_list =
-      match ps, m_list, v_list with
-      | p :: pt, mt :: mtt, vt :: vtt ->
-          let r, c = dim1 p.Tensor.data, dim2 p.Tensor.data in
-          for ir = 0 to r - 1 do 
-            for ic = 0 to c - 1 do
-              let g = Array2.get p.Tensor.grad ir ic in
-              let m_val = beta1 *. Array2.get mt ir ic +. (1.0 -. beta1) *. g in
-              let v_val = beta2 *. Array2.get vt ir ic +. (1.0 -. beta2) *. (g *. g) in
-              Array2.set mt ir ic m_val; 
-              Array2.set vt ir ic v_val;
-              let m_hat = m_val /. (1.0 -. (beta1 ** float_of_int (step + 1))) in
-              let v_hat = v_val /. (1.0 -. (beta2 ** float_of_int (step + 1))) in
-              let old_d = Array2.get p.Tensor.data ir ic in
-              Array2.set p.Tensor.data ir ic (old_d -. lr_t *. m_hat /. (sqrt v_hat +. eps));
-              Array2.set p.Tensor.grad ir ic 0.0
-            done 
-          done;
-          update pt mtt vtt
-      | _ -> ()
-    in
-    update params m v;
+      (* Adam Update Matching microgpt.ml *)
+      let lr_t = learning_rate *. (1.0 -. (float_of_int step /. float_of_int num_steps)) in
+      let rec update ps m_list v_list =
+        match ps, m_list, v_list with
+        | p :: pt, mt :: mtt, vt :: vtt ->
+            let r, c = dim1 p.Tensor.data, dim2 p.Tensor.data in
+            for ir = 0 to r - 1 do 
+              for ic = 0 to c - 1 do
+                let g = Array2.get p.Tensor.grad ir ic in
+                let m_val = beta1 *. Array2.get mt ir ic +. (1.0 -. beta1) *. g in
+                let v_val = beta2 *. Array2.get vt ir ic +. (1.0 -. beta2) *. (g *. g) in
+                Array2.set mt ir ic m_val; 
+                Array2.set vt ir ic v_val;
+                let m_hat = m_val /. (1.0 -. (beta1 ** float_of_int (step + 1))) in
+                let v_hat = v_val /. (1.0 -. (beta2 ** float_of_int (step + 1))) in
+                let old_d = Array2.get p.Tensor.data ir ic in
+                Array2.set p.Tensor.data ir ic (old_d -. lr_t *. m_hat /. (sqrt v_hat +. eps));
+                Array2.set p.Tensor.grad ir ic 0.0
+              done 
+            done;
+            update pt mtt vtt
+        | _ -> ()
+      in
+      update params m v;
 
-    Printf.printf "step %4d / %4d | loss %.4f\r%!" (step + 1) num_steps avg_loss
-  done;
+      Printf.printf "step %4d / %4d | loss %.4f\r%!" (step + 1) num_steps avg_loss;
+      train_loop (step + 1)
+    end
+  in
+  train_loop 0;
   
-  (* 4. Inference *)
-  Printf.printf "\n--- inference (new, hallucinated names) ---\n";
-  for i = 1 to 20 do
-    let rec gen tokens keys values =
-      if List.length tokens > 15 then tokens
-      else
-        let tid = List.hd (List.rev tokens) in
-        let pos_id = List.length tokens - 1 in
-        let logits = gpt state tid pos_id keys values in
-        for j = 0 to vocab_size - 1 do 
-          Tensor.set_entry logits 0 j (Tensor.entry logits 0 j /. 0.5) 
-        done;
-        let probs = Tensor.softmax logits in
-        let r = Random.float 1.0 in
-        let rec sample_prob i cum =
-          if i >= vocab_size then bos_token else
-          let cum = cum +. Tensor.entry probs 0 i in
-          if r <= cum then i else sample_prob (i + 1) cum
-        in
-        let next_id = sample_prob 0 0.0 in
-        if next_id = bos_token then tokens 
-        else gen (tokens @ [next_id]) keys values
-    in
-    let keys, values = Array.make n_layer [], Array.make n_layer [] in
-    let tokens = gen [bos_token] keys values in
-    let name = 
-      List.filter (fun t -> t <> bos_token) tokens 
-      |> List.map (fun t -> uchars.(t)) |> List.to_seq |> String.of_seq 
-    in
-    Printf.printf "sample %2d: %s\n" i name
-  done
+  let rec infer_loop i =
+    if i > 20 then ()
+    else begin
+      let rec gen tokens keys values =
+        if List.length tokens > 15 then tokens
+        else
+          let tid = List.hd (List.rev tokens) in
+          let pos_id = List.length tokens - 1 in
+          let logits = gpt state tid pos_id keys values in
+          for j = 0 to vocab_size - 1 do 
+            Tensor.set_entry logits 0 j (Tensor.entry logits 0 j /. 0.5) 
+          done;
+          let probs = Tensor.softmax logits in
+          let r = Random.float 1.0 in
+          let rec sample_prob i cum =
+            if i >= vocab_size then bos_token else
+            let cum = cum +. Tensor.entry probs 0 i in
+            if r <= cum then i else sample_prob (i + 1) cum
+          in
+          let next_id = sample_prob 0 0.0 in
+          if next_id = bos_token then tokens 
+          else gen (tokens @ [next_id]) keys values
+      in
+      let keys, values = Array.make n_layer [], Array.make n_layer [] in
+      let tokens = gen [bos_token] keys values in
+      let name = 
+        List.filter (fun t -> t <> bos_token) tokens 
+        |> List.map (fun t -> uchars.(t)) |> List.to_seq |> String.of_seq 
+      in
+      Printf.printf "sample %2d: %s\n" i name;
+      infer_loop (i + 1)
+    end
+  in
+  infer_loop 1
 
 let () = main ()
