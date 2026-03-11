@@ -40,15 +40,15 @@ module Value = struct
 
   (* Reverse-mode autodiff: traverse the graph in reverse topological order *)
   let backward root =
-    let topo = ref [] in
-    let rec build v =
-      if not v._visited then begin
-        v._visited <- true; 
-        List.iter build v._prev; 
-        topo := v :: !topo
+    let rec build v topo =
+      if v._visited then topo
+      else begin
+        v._visited <- true;
+        let topo' = List.fold_left (fun acc child -> build child acc) topo v._prev in
+        v :: topo'
       end
     in
-    build root;
+    let topo = build root [] in
     root.grad <- 1.0; (* Seed the gradient of the loss with 1.0 *)
     List.iter (fun v ->
       (* Propagate gradients to children using the stored chain rule derivatives *)
@@ -56,7 +56,7 @@ module Value = struct
         child.grad <- child.grad +. (og *. v.grad)
       ) v._prev v._op_grad;
       v._visited <- false
-    ) !topo
+    ) topo
 
   let data v = v.data
   let grad v = v.grad
