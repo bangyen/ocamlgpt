@@ -348,6 +348,40 @@ module Tensor = struct
   let slice_col x c len = 
     let r = dim1 x.data in 
     let out = create r len in slice_col_into out x c len; out
+
+  let stack_scalars_into out xs =
+    List.iteri (fun i x -> set out.data 0 i (get x.data 0 0)) xs;
+    out._prev <- xs;
+    out._backward <- (fun () ->
+      List.iteri (fun i x ->
+        set x.grad 0 0 (get x.grad 0 0 +. get out.grad 0 i)
+      ) xs
+    )
+
+  let stack_scalars xs =
+    let out = create 1 (List.length xs) in stack_scalars_into out xs; out
+
+  let concat_cols_into out xs =
+    let h = dim2 (List.hd xs).data in
+    List.iteri (fun i x ->
+      let offset = i * h in
+      for j = 0 to h - 1 do
+        set out.data 0 (offset + j) (get x.data 0 j)
+      done
+    ) xs;
+    out._prev <- xs;
+    out._backward <- (fun () ->
+      List.iteri (fun i x ->
+        let offset = i * h in
+        for j = 0 to h - 1 do
+          set x.grad 0 j (get x.grad 0 j +. get out.grad 0 (offset + j))
+        done
+      ) xs
+    )
+
+  let concat_cols xs =
+    let h = dim2 (List.hd xs).data in
+    let out = create 1 (List.length xs * h) in concat_cols_into out xs; out
     
   let step_adam params m_list v_list step learning_rate num_steps beta1 beta2 eps =
     let lr_t = learning_rate *. (1.0 -. (float_of_int step /. float_of_int num_steps)) in
@@ -445,53 +479,20 @@ let gpt state tid pid keys values =
 
       (* Multi-Head Attention *)
       let x_attn = 
-        let hs = List.init n_head (fun h ->
+        List.init n_head (fun h ->
           let hs = h * head_dim in
           let q_h = Tensor.slice_col q hs head_dim in
           let k_h = List.map (fun ki -> Tensor.slice_col ki hs head_dim) keys.(li) in
           let v_h = List.map (fun vi -> Tensor.slice_col vi hs head_dim) values.(li) in
           
           let scale_factor = 1.0 /. sqrt (float_of_int head_dim) in
-          let attn_logits_list = List.map (fun kh ->
-            Tensor.mul_scalar (Tensor.dot_product q_h kh) scale_factor
-          ) k_h in
-          
-          let attn_logits = Tensor.create 1 (List.length k_h) in
-          List.iteri (fun t dot_node ->
-            Tensor.set_entry attn_logits 0 t (Tensor.entry dot_node 0 0)
-          ) attn_logits_list;
-          
-          attn_logits.Tensor._prev <- attn_logits_list;
-          attn_logits.Tensor._backward <- (fun () ->
-            List.iteri (fun t dot_node ->
-              let g = Array2.get attn_logits.Tensor.grad 0 t in
-              let old_g = Array2.get dot_node.Tensor.grad 0 0 in
-              Array2.set dot_node.Tensor.grad 0 0 (old_g +. g)
-            ) attn_logits_list
-          );
-          
-          let attn_weights = Tensor.softmax attn_logits in
-          Tensor.weighted_sum attn_weights v_h
-        ) in
-        
-        let out = Tensor.create 1 n_embd in
-        List.iteri (fun h (h_tensor : Tensor.t) ->
-          for j = 0 to head_dim - 1 do
-            Tensor.set_entry out 0 (h * head_dim + j) (Tensor.entry h_tensor 0 j)
-          done
-        ) hs;
-        
-        out.Tensor._prev <- hs;
-        out.Tensor._backward <- (fun () ->
-          List.iteri (fun h (h_tensor : Tensor.t) ->
-            for j = 0 to head_dim - 1 do
-              let g = Array2.get out.Tensor.grad 0 (h * head_dim + j) in
-              let old_g = Array2.get h_tensor.Tensor.grad 0 j in
-              Array2.set h_tensor.Tensor.grad 0 j (old_g +. g)
-            done
-          ) hs
-        );
-        out
+          k_h 
+          |> List.map (fun kh -> Tensor.mul_scalar (Tensor.dot_product q_h kh) scale_factor)
+          |> Tensor.stack_scalars 
+          |> Tensor.softmax
+          |> fun w -> Tensor.weighted_sum w v_h
+        ) 
+        |> Tensor.concat_cols
       in
       
       (* Residual Connection + FFN *)
