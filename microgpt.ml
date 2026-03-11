@@ -162,34 +162,36 @@ let gpt state token_id pos_id keys values =
     else
       let l = state.layers.(li) in
       let x_norm = x |> rmsnorm in
-      let q, k, v = linear l.wq x_norm, linear l.wk x_norm, linear l.wv x_norm in
+      let q, k, v = x_norm |> linear l.wq, x_norm |> linear l.wk, x_norm |> linear l.wv in
       
       (* KV Caching: Store previous K/V for autoregressive inference/context *)
       keys.(li) <- keys.(li) @ [k];
       values.(li) <- values.(li) @ [v];
 
       (* Multi-Head Attention *)
-      let x_attn = Array.init n_embd (fun j ->
-        let h = j / head_dim in
-        let hj = j mod head_dim in
-        let hs = h * head_dim in
-        let q_h = Array.sub q hs head_dim in
-        let k_h = List.map (fun ki -> Array.sub ki hs head_dim) keys.(li) in
-        let v_h = List.map (fun vi -> Array.sub vi hs head_dim) values.(li) in
-
-        let attn_weights = 
-          k_h |> List.map (fun kh ->
-            dot q_h kh /: Value.scalar (sqrt (float head_dim))
-          ) |> Array.of_list |> softmax
-        in
-        
-        List.fold_left2 (fun a weight vhi ->
-          a +: (weight *: vhi.(hj))
-        ) Value.zero (Array.to_list attn_weights) v_h
-      ) in
+      let x_attn = 
+        List.init n_head (fun h ->
+          let hs = h * head_dim in
+          let q_h = Array.sub q hs head_dim in
+          let k_h = List.map (fun ki -> Array.sub ki hs head_dim) keys.(li) in
+          let v_h = List.map (fun vi -> Array.sub vi hs head_dim) values.(li) in
+          
+          let attn_weights = 
+            k_h |> List.map (fun kh ->
+              dot q_h kh /: Value.scalar (sqrt (float head_dim))
+            ) |> Array.of_list |> softmax
+          in
+          
+          Array.init head_dim (fun hj ->
+            List.fold_left2 (fun a weight vhi ->
+              a +: (weight *: vhi.(hj))
+            ) Value.zero (Array.to_list attn_weights) v_h
+          )
+        ) |> Array.concat
+      in
       
       (* Residual Connection + FFN *)
-      let x = x +^ (x_attn |> linear l.wo) in
+      let x = x_attn |> linear l.wo |> ( +^ ) x in
       let mlp_out = 
         x |> rmsnorm 
         |> linear l.fc1 
