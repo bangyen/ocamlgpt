@@ -11,40 +11,32 @@
 *)
 module Value = struct
   type t = {
-    mutable data : float;
-    mutable grad : float;
-    _prev : t list;       (* Ancestor nodes in the computation graph *)
-    _op_grad : float list; (* Local derivatives w.r.t. each ancestor *)
+    mutable data     : float;
+    mutable grad     : float;
+    _prev            : t list;     (* Ancestor nodes in the computation graph *)
+    _op_grad         : float list; (* Local derivatives w.r.t. each ancestor *)
     mutable _visited : bool;
   }
 
-  let create ?(prev=[]) ?(op_grad=[]) data =
+  let create data prev op_grad =
     { data; grad = 0.0; _prev = prev; _op_grad = op_grad; _visited = false }
+  let scalar d = create d [] []
+  let zero = scalar 0.0
 
   (* Basic operations: each creates a new node and stores local gradients (Chain Rule) *)
-  let add a b = 
-    create ~prev:[a; b] ~op_grad:[1.0; 1.0] (a.data +. b.data)
+  let add a b = create (a.data +. b.data) [a; b] [1.0; 1.0]
+  let mul a b = create (a.data *. b.data) [a; b] [b.data; a.data]
+  let pow v n = create (v.data ** n) [v] [n *. (v.data ** (n -. 1.0))]
+  let log v   = create (log v.data) [v] [1.0 /. v.data]
+  let exp v   = let e = exp v.data in create e [v] [e]
 
-  let mul a b = 
-    create ~prev:[a; b] ~op_grad:[b.data; a.data] (a.data *. b.data)
+  let relu v  =
+    create (max 0.0 v.data) [v]
+    [if v.data > 0.0 then 1.0 else 0.0]
 
-  let pow v n = 
-    create ~prev:[v] ~op_grad:[n *. (v.data ** (n -. 1.0))] (v.data ** n)
-
-  let log v = 
-    create ~prev:[v] ~op_grad:[1.0 /. v.data] (log v.data)
-
-  let exp v = 
-    let e = exp v.data in 
-    create ~prev:[v] ~op_grad:[e] e
-
-  let relu v = 
-    let grad = if v.data > 0.0 then 1.0 else 0.0 in
-    create ~prev:[v] ~op_grad:[grad] (max 0.0 v.data)
-
-  let neg v   = mul v (create (-1.0))
-  let sub a b = add a (neg b)
+  let neg v   = mul v (scalar (-1.0))
   let div a b = mul a (pow b (-1.0))
+  let sub a b = add a (neg b)
 
   (* Reverse-mode autodiff: traverse the graph in reverse topological order *)
   let backward root =
@@ -76,23 +68,23 @@ end
 let ( +: ), ( -: ), ( *: ), ( /: ) = Value.add, Value.sub, Value.mul, Value.div
 
 (* --- Configuration --- *)
-let n_layer = 1         (* Number of transformer blocks *)
-let n_embd = 16         (* Embedding dimension *)
-let block_size = 16     (* Maximum sequence length *)
-let n_head = 4          (* Number of attention heads *)
-let head_dim = n_embd / n_head (* Each head processes a slice of the embedding dimension. *)
+let n_layer       = 1               (* Number of transformer blocks *)
+let n_embd        = 16              (* Embedding dimension *)
+let block_size    = 16              (* Maximum sequence length *)
+let n_head        = 4               (* Number of attention heads *)
+let head_dim      = n_embd / n_head (* Each head processes a slice of the embedding dimension. *)
 let learning_rate = 0.01
-let beta1 = 0.85
-let beta2 = 0.99
-let eps_adam = 1e-8
-let num_steps = 1000
+let beta1         = 0.85
+let beta2         = 0.99
+let eps_adam      = 1e-8
+let num_steps     = 1000
 
 (* --- Model State --- *)
 type layer = {
-  wq : Value.t array array;
-  wk : Value.t array array;
-  wv : Value.t array array;
-  wo : Value.t array array;
+  wq  : Value.t array array;
+  wk  : Value.t array array;
+  wv  : Value.t array array;
+  wo  : Value.t array array;
   fc1 : Value.t array array;
   fc2 : Value.t array array;
 }
@@ -117,34 +109,31 @@ let gauss mean std =
   let u2 = Random.float 1.0 in
   mean +. std *. sqrt (-2.0 *. log u1) *. cos (2.0 *. Float.pi *. u2)
 
-let matrix rows cols std =
+let matrix ?(std = 0.08) rows cols =
   Array.init rows (fun _ -> 
-    Array.init cols (fun _ -> Value.create (gauss 0.0 std))
+    Array.init cols (fun _ -> Value.scalar (gauss 0.0 std))
   )
 
 (* Linear Layer: y = xW^T *)
 let linear x w =
-  w |> Array.map (fun row ->
-    let acc = ref (Value.create 0.0) in
-    for i = 0 to Array.length x - 1 do 
-      acc := !acc +: (x.(i) *: row.(i)) 
-    done;
-    !acc
-  )
+  Array.map (fun row ->
+    let seq_x = Array.to_seq x and seq_row = Array.to_seq row in
+    Seq.fold_left2 (fun acc a b -> acc +: (a *: b)) Value.zero seq_x seq_row
+  ) w
 
 (* Softmax: exp(xi) / sum(exp(xj)) *)
 let softmax logits =
-  let max_val = Array.fold_left (fun m (v:Value.t) -> max m (Value.data v)) (-. infinity) logits in
-  let exps = logits |> Array.map (fun v -> Value.exp (v -: Value.create max_val)) in
-  let total = Array.fold_left (+:) (Value.create 0.0) exps in
+  let max_val = Array.fold_left (fun m v -> max m (Value.data v)) (-. infinity) logits in
+  let exps = logits |> Array.map (fun v -> Value.exp (v -: Value.scalar max_val)) in
+  let total = Array.fold_left (+:) Value.zero exps in
   exps |> Array.map (fun e -> e /: total)
 
 (* RMSNorm: x / sqrt(mean(x^2) + eps) *)
 let rmsnorm x =
   let n = float_of_int (Array.length x) in
-  let ms = Array.fold_left (fun acc xi -> acc +: (xi *: xi)) (Value.create 0.0) x in
+  let ms = Array.fold_left (fun acc xi -> acc +: (xi *: xi)) Value.zero x in
   let scale = 
-    (ms /: Value.create n) +: Value.create 1e-5 
+    (ms /: Value.scalar n) +: Value.scalar 1e-5 
     |> fun v -> Value.pow v (-0.5) 
   in
   x |> Array.map (fun xi -> xi *: scale)
@@ -175,15 +164,15 @@ let gpt state token_id pos_id keys values =
 
         let attn_weights = 
           k_h |> List.map (fun kh ->
-            let acc = ref (Value.create 0.0) in
+            let acc = ref Value.zero in
             for i = 0 to head_dim - 1 do 
               acc := !acc +: (q_h.(i) *: kh.(i)) 
             done;
-            !acc /: Value.create (sqrt (float_of_int head_dim))
+            !acc /: Value.scalar (sqrt (float_of_int head_dim))
           ) |> Array.of_list |> softmax
         in
         
-        let acc = ref (Value.create 0.0) in
+        let acc = ref Value.zero in
         List.iteri (fun i vhi -> 
           acc := !acc +: (attn_weights.(i) *: vhi.(hj))
         ) v_h;
@@ -209,20 +198,15 @@ let main () =
   
   (* 1. Load Data (Minimalist) *)
   if not (Sys.file_exists "input.txt") then begin
-    Printf.printf "input.txt not found, downloading...\n%!";
-    let _ = Sys.command "curl -s https://raw.githubusercontent.com/karpathy/makemore/988aa59/names.txt -o input.txt" in
+    let link = "https://raw.githubusercontent.com/karpathy/makemore/988aa59/names.txt" in
+    let _ = Sys.command ("curl -s " ^ link ^ " -o input.txt") in
     ()
   end;
   
-  let docs =
-    let ic = open_in "input.txt" in
-    let rec read_lines acc =
-      try 
-        let line = input_line ic in 
-        read_lines (if line <> "" then line :: acc else acc)
-      with End_of_file -> close_in ic; acc
-    in 
-    Array.of_list (List.rev (read_lines []))
+  let docs = 
+    In_channel.with_open_text "input.txt" In_channel.input_lines
+    |> List.filter (fun s -> s <> "") 
+    |> Array.of_list
   in
   
   let all_chars = 
@@ -240,16 +224,16 @@ let main () =
 
   (* 2. Initialize Model *)
   let state = {
-    wte = matrix !vocab_size n_embd 0.08;
-    wpe = matrix block_size n_embd 0.08;
-    lm_head = matrix !vocab_size n_embd 0.08;
+    wte = matrix !vocab_size n_embd;
+    wpe = matrix block_size n_embd;
+    lm_head = matrix !vocab_size n_embd;
     layers = Array.init n_layer (fun _ -> {
-      wq = matrix n_embd n_embd 0.08;
-      wk = matrix n_embd n_embd 0.08;
-      wv = matrix n_embd n_embd 0.08;
-      wo = matrix n_embd n_embd 0.08;
-      fc1 = matrix (4 * n_embd) n_embd 0.08;
-      fc2 = matrix n_embd (4 * n_embd) 0.08;
+      wq = matrix n_embd n_embd;
+      wk = matrix n_embd n_embd;
+      wv = matrix n_embd n_embd;
+      wo = matrix n_embd n_embd;
+      fc1 = matrix (4 * n_embd) n_embd;
+      fc2 = matrix n_embd (4 * n_embd);
     });
   } in
 
@@ -297,7 +281,8 @@ let main () =
     in
     let n = min block_size (List.length tokens - 1) in
 
-    let keys, values = Array.make n_layer [], Array.make n_layer [] in
+    let keys   = Array.make n_layer [] in
+    let values = Array.make n_layer [] in
     let losses = ref [] in
 
     for pos_id = 0 to n - 1 do
@@ -310,14 +295,14 @@ let main () =
       losses := loss :: !losses
     done;
     
-    let total_loss = List.fold_left (+:) (Value.create 0.0) !losses in
-    let avg_loss = total_loss /: (Value.create (float_of_int n)) in
+    let total_loss = List.fold_left (+:) Value.zero !losses in
+    let avg_loss = total_loss /: (Value.scalar (float_of_int n)) in
 
     Value.backward avg_loss;
 
     (* Adam Optimizer update with linear learning rate decay *)
     let lr_t = learning_rate *. (1.0 -. (float_of_int step /. float_of_int num_steps)) in
-    Array.iteri (fun i (p : Value.t) ->
+    Array.iteri (fun i p ->
       m.(i) <- beta1 *. m.(i) +. (1.0 -. beta1) *. Value.grad p;
       v.(i) <- beta2 *. v.(i) +. (1.0 -. beta2) *. (Value.grad p ** 2.0);
       let m_hat = m.(i) /. (1.0 -. (beta1 ** float_of_int (step + 1))) in
@@ -327,30 +312,33 @@ let main () =
       Value.set_grad p 0.0
     ) params_arr;
 
-    Printf.printf "step %4d / %4d | loss %.4f\r%!" (step + 1) num_steps (Value.data avg_loss)
+    Printf.printf
+      "step %4d / %4d | loss %.4f\r%!"
+      (step + 1) num_steps (Value.data avg_loss)
   done;
 
   (* 4. Inference *)
   let temperature = 0.5 in
   Printf.printf "\n--- inference (new, hallucinated names) ---\n";
   for sample_idx = 1 to 20 do
-    let keys, values = Array.make n_layer [], Array.make n_layer [] in
+    let keys     = Array.make n_layer [] in
+    let values   = Array.make n_layer [] in
     let token_id = ref !bos_token in
-    let sample = ref [] in
+    let sample   = ref [] in
 
     let rec generate pos_id =
       if pos_id >= block_size then ()
       else
         let logits = gpt state !token_id pos_id keys values in
         let scaled_logits = 
-          Array.map (fun (v:Value.t) -> Value.create (Value.data v /. temperature)) logits 
+          Array.map (fun v -> Value.scalar (Value.data v /. temperature)) logits 
         in
         let probs = softmax scaled_logits in
         let r = Random.float 1.0 in
         let cumulative_prob = ref 0.0 in
         let selected_idx = ref !bos_token in
         let found = ref false in
-        Array.iteri (fun i (p:Value.t) ->
+        Array.iteri (fun i p ->
           if not !found then begin
             cumulative_prob := !cumulative_prob +. Value.data p;
             if r <= !cumulative_prob then (selected_idx := i; found := true)
@@ -363,7 +351,9 @@ let main () =
         end
     in
     generate 0;
-    Printf.printf "sample %2d: %s\n" sample_idx (String.of_seq (List.to_seq !sample))
+    Printf.printf
+      "sample %2d: %s\n" sample_idx
+      (String.of_seq (List.to_seq !sample))
   done
 
 let () = main ()
