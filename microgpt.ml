@@ -116,7 +116,8 @@ let () = Random.init 42
 let docs =
   if not (Sys.file_exists "input.txt") then
     ignore (Sys.command "curl -s https://raw.githubusercontent.com/karpathy/makemore/988aa59/names.txt -o input.txt");
-  In_channel.with_open_text "input.txt" In_channel.input_lines
+  In_channel.with_open_text "input.txt" (fun ic ->
+    In_channel.input_all ic |> String.split_on_char '\n')
   |> List.filter ((<>) "")
   |> Array.of_list
 
