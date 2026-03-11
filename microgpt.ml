@@ -258,79 +258,90 @@ let main () =
     a
   in
 
-  for step = 0 to num_steps - 1 do
-    let doc = docs_shuffled.(step mod Array.length docs_shuffled) in
-    let tokens = 
-      [!bos_token] @ (String.to_seq doc |> Seq.map (fun c ->
-        let rec find i = if !uchars.(i) = c then i else find (i + 1) in find 0
-      ) |> List.of_seq) @ [!bos_token] 
-    in
-    let n = min block_size (List.length tokens - 1) in
+  let rec train_loop step =
+    if step >= num_steps then ()
+    else begin
+      let doc = docs_shuffled.(step mod Array.length docs_shuffled) in
+      let tokens = 
+        [!bos_token] @ (String.to_seq doc |> Seq.map (fun c ->
+          let rec find i = if !uchars.(i) = c then i else find (i + 1) in find 0
+        ) |> List.of_seq) @ [!bos_token] 
+      in
+      let n = min block_size (List.length tokens - 1) in
 
-    let keys   = Array.make n_layer [] in
-    let values = Array.make n_layer [] in
+      let keys   = Array.make n_layer [] in
+      let values = Array.make n_layer [] in
 
-    let losses = 
-      List.init n (fun pos_id ->
-        let token_id  = List.nth tokens pos_id in
-        let target_id = List.nth tokens (pos_id + 1) in
-        let logits    = gpt state token_id pos_id keys values in
-        logits |> softmax |> fun p -> Value.log p.(target_id) |> Value.neg
-      )
-    in
-    
-    let total_loss = List.fold_left (+:) Value.zero losses in
-    let avg_loss = total_loss /: (Value.scalar (float_of_int n)) in
+      let losses = 
+        List.init n (fun pos_id ->
+          let token_id  = List.nth tokens pos_id in
+          let target_id = List.nth tokens (pos_id + 1) in
+          let logits    = gpt state token_id pos_id keys values in
+          logits |> softmax |> fun p -> Value.log p.(target_id) |> Value.neg
+        )
+      in
+      
+      let total_loss = List.fold_left (+:) Value.zero losses in
+      let avg_loss = total_loss /: (Value.scalar (float_of_int n)) in
 
-    Value.backward avg_loss;
+      Value.backward avg_loss;
 
-    (* Adam Optimizer update with linear learning rate decay *)
-    let lr_t = learning_rate *. (1.0 -. (float_of_int step /. float_of_int num_steps)) in
-    Array.iteri (fun i p ->
-      m.(i) <- beta1 *. m.(i) +. (1.0 -. beta1) *. Value.grad p;
-      v.(i) <- beta2 *. v.(i) +. (1.0 -. beta2) *. (Value.grad p ** 2.0);
-      let m_hat = m.(i) /. (1.0 -. (beta1 ** float_of_int (step + 1))) in
-      let v_hat = v.(i) /. (1.0 -. (beta2 ** float_of_int (step + 1))) in
-      let delta = lr_t *. m_hat /. (sqrt v_hat +. eps_adam) in
-      Value.set_data p (Value.data p -. delta);
-      Value.set_grad p 0.0
-    ) params_arr;
+      (* Adam Optimizer update with linear learning rate decay *)
+      let lr_t = learning_rate *. (1.0 -. (float_of_int step /. float_of_int num_steps)) in
+      Array.iteri (fun i p ->
+        m.(i) <- beta1 *. m.(i) +. (1.0 -. beta1) *. Value.grad p;
+        v.(i) <- beta2 *. v.(i) +. (1.0 -. beta2) *. (Value.grad p ** 2.0);
+        let m_hat = m.(i) /. (1.0 -. (beta1 ** float_of_int (step + 1))) in
+        let v_hat = v.(i) /. (1.0 -. (beta2 ** float_of_int (step + 1))) in
+        let delta = lr_t *. m_hat /. (sqrt v_hat +. eps_adam) in
+        Value.set_data p (Value.data p -. delta);
+        Value.set_grad p 0.0
+      ) params_arr;
 
-    Printf.printf
-      "step %4d / %4d | loss %.4f\r%!"
-      (step + 1) num_steps (Value.data avg_loss)
-  done;
+      Printf.printf
+        "step %4d / %4d | loss %.4f\r%!"
+        (step + 1) num_steps (Value.data avg_loss);
+      
+      train_loop (step + 1)
+    end
+  in
+  train_loop 0;
 
   (* 4. Inference *)
   let temperature = 0.5 in
   Printf.printf "\n--- inference (new, hallucinated names) ---\n";
-  for sample_idx = 1 to 20 do
-    let keys     = Array.make n_layer [] in
-    let values   = Array.make n_layer [] in
-    let rec generate pos_id tokens =
-      if pos_id >= block_size then tokens
-      else
-        let token_id = List.hd (List.rev tokens) in
-        let logits = gpt state token_id pos_id keys values in
-        let scaled_logits = 
-          Array.map (fun v -> Value.scalar (Value.data v /. temperature)) logits 
-        in
-        let probs = softmax scaled_logits in
-        let r = Random.float 1.0 in
-        let rec sample_prob i cum =
-          if i >= !vocab_size then !bos_token else
-          let cum = cum +. Value.data probs.(i) in
-          if r <= cum then i else sample_prob (i + 1) cum
-        in
-        let next_id = sample_prob 0 0.0 in
-        if next_id = !bos_token then tokens
-        else generate (pos_id + 1) (tokens @ [next_id])
-    in
-    let sample_ids = generate 0 [!bos_token] |> List.tl in
-    let sample_chars = List.map (fun id -> !uchars.(id)) sample_ids in
-    Printf.printf
-      "sample %2d: %s\n" sample_idx
-      (String.of_seq (List.to_seq sample_chars))
-  done
+  let rec infer_loop sample_idx =
+    if sample_idx > 20 then ()
+    else begin
+      let keys     = Array.make n_layer [] in
+      let values   = Array.make n_layer [] in
+      let rec generate pos_id tokens =
+        if pos_id >= block_size then tokens
+        else
+          let token_id = List.hd (List.rev tokens) in
+          let logits = gpt state token_id pos_id keys values in
+          let scaled_logits = 
+            Array.map (fun v -> Value.scalar (Value.data v /. temperature)) logits 
+          in
+          let probs = softmax scaled_logits in
+          let r = Random.float 1.0 in
+          let rec sample_prob i cum =
+            if i >= !vocab_size then !bos_token else
+            let cum = cum +. Value.data probs.(i) in
+            if r <= cum then i else sample_prob (i + 1) cum
+          in
+          let next_id = sample_prob 0 0.0 in
+          if next_id = !bos_token then tokens
+          else generate (pos_id + 1) (tokens @ [next_id])
+      in
+      let sample_ids = generate 0 [!bos_token] |> List.tl in
+      let sample_chars = List.map (fun id -> !uchars.(id)) sample_ids in
+      Printf.printf
+        "sample %2d: %s\n" sample_idx
+        (String.of_seq (List.to_seq sample_chars));
+      infer_loop (sample_idx + 1)
+    end
+  in
+  infer_loop 1
 
 let () = main ()
