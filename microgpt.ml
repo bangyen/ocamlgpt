@@ -144,6 +144,10 @@ let softmax logits =
   let total = Array.fold_left (+:) Value.zero exps in
   Array.map (fun e -> e /: total) exps
 
+(* Cross-Entropy Loss: -log(p(target)) *)
+let cross_entropy logits target_id =
+  logits |> softmax |> fun p -> Value.log p.(target_id) |> Value.neg
+
 (* ReLU Activation: max(0, x) *)
 let relu = Array.map Value.relu
 
@@ -201,6 +205,24 @@ let gpt state token_id pos_id keys values =
       apply_layers (x +^ mlp_out) (li + 1)
   in
   apply_layers x 0 |> linear state.lm_head
+
+(* --- Optimization Ops --- *)
+
+(* Adam Optimizer Step *)
+let step_adam params m v step =
+  let lr_t = learning_rate *. (1.0 -. (float_of_int step /. float_of_int num_steps)) in
+  let b1_t = 1.0 -. (beta1 ** float_of_int (step + 1)) in
+  let b2_t = 1.0 -. (beta2 ** float_of_int (step + 1)) in
+  Array.iteri (fun i p ->
+    let g = Value.grad p in
+    m.(i) <- beta1 *. m.(i) +. (1.0 -. beta1) *. g;
+    v.(i) <- beta2 *. v.(i) +. (1.0 -. beta2) *. (g *. g);
+    let m_hat = m.(i) /. b1_t in
+    let v_hat = v.(i) /. b2_t in
+    let delta = lr_t *. m_hat /. (sqrt v_hat +. eps_adam) in
+    Value.set_data p (Value.data p -. delta);
+    Value.set_grad p 0.0
+  ) params
 
 (* --- Main Execution --- *)
 
@@ -268,8 +290,7 @@ let main () =
         List.init n (fun pos_id ->
           let token_id  = List.nth tokens pos_id in
           let target_id = List.nth tokens (pos_id + 1) in
-          let logits    = gpt state token_id pos_id keys values in
-          logits |> softmax |> fun p -> Value.log p.(target_id) |> Value.neg
+          cross_entropy (gpt state token_id pos_id keys values) target_id
         )
       in
       
@@ -277,18 +298,7 @@ let main () =
       let avg_loss = total_loss /: (Value.scalar (float_of_int n)) in
 
       Value.backward avg_loss;
-
-      (* Adam Optimizer update with linear learning rate decay *)
-      let lr_t = learning_rate *. (1.0 -. (float_of_int step /. float_of_int num_steps)) in
-      Array.iteri (fun i p ->
-        m.(i) <- beta1 *. m.(i) +. (1.0 -. beta1) *. Value.grad p;
-        v.(i) <- beta2 *. v.(i) +. (1.0 -. beta2) *. (Value.grad p ** 2.0);
-        let m_hat = m.(i) /. (1.0 -. (beta1 ** float_of_int (step + 1))) in
-        let v_hat = v.(i) /. (1.0 -. (beta2 ** float_of_int (step + 1))) in
-        let delta = lr_t *. m_hat /. (sqrt v_hat +. eps_adam) in
-        Value.set_data p (Value.data p -. delta);
-        Value.set_grad p 0.0
-      ) params_arr;
+      step_adam params_arr m v step;
 
       Printf.printf
         "step %4d / %4d | loss %.4f\r%!"

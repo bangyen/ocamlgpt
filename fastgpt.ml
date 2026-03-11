@@ -348,6 +348,31 @@ module Tensor = struct
   let slice_col x c len = 
     let r = dim1 x.data in 
     let out = create r len in slice_col_into out x c len; out
+    
+  let step_adam params m_list v_list step learning_rate num_steps beta1 beta2 eps =
+    let lr_t = learning_rate *. (1.0 -. (float_of_int step /. float_of_int num_steps)) in
+    let rec update ps m v =
+      match ps, m, v with
+      | p :: pt, mt :: mtt, vt :: vtt ->
+          let r, c = dim1 p.data, dim2 p.data in
+          for ir = 0 to r - 1 do 
+            for ic = 0 to c - 1 do
+              let g = Array2.get p.grad ir ic in
+              let m_val = beta1 *. Array2.get mt ir ic +. (1.0 -. beta1) *. g in
+              let v_val = beta2 *. Array2.get vt ir ic +. (1.0 -. beta2) *. (g *. g) in
+              Array2.set mt ir ic m_val; 
+              Array2.set vt ir ic v_val;
+              let m_hat = m_val /. (1.0 -. (beta1 ** float_of_int (step + 1))) in
+              let v_hat = v_val /. (1.0 -. (beta2 ** float_of_int (step + 1))) in
+              let old_d = Array2.get p.data ir ic in
+              Array2.set p.data ir ic (old_d -. lr_t *. m_hat /. (sqrt v_hat +. eps));
+              Array2.set p.grad ir ic 0.0
+            done 
+          done;
+          update pt mtt vtt
+      | _ -> ()
+    in
+    update params m_list v_list
 end
 
 (* --- Configuration --- *)
@@ -567,30 +592,8 @@ let main () =
       Tensor.backward avg_loss_node;
       let avg_loss = Tensor.entry avg_loss_node 0 0 in
 
-      (* Adam Update Matching microgpt.ml *)
-      let lr_t = learning_rate *. (1.0 -. (float_of_int step /. float_of_int num_steps)) in
-      let rec update ps m_list v_list =
-        match ps, m_list, v_list with
-        | p :: pt, mt :: mtt, vt :: vtt ->
-            let r, c = dim1 p.Tensor.data, dim2 p.Tensor.data in
-            for ir = 0 to r - 1 do 
-              for ic = 0 to c - 1 do
-                let g = Array2.get p.Tensor.grad ir ic in
-                let m_val = beta1 *. Array2.get mt ir ic +. (1.0 -. beta1) *. g in
-                let v_val = beta2 *. Array2.get vt ir ic +. (1.0 -. beta2) *. (g *. g) in
-                Array2.set mt ir ic m_val; 
-                Array2.set vt ir ic v_val;
-                let m_hat = m_val /. (1.0 -. (beta1 ** float_of_int (step + 1))) in
-                let v_hat = v_val /. (1.0 -. (beta2 ** float_of_int (step + 1))) in
-                let old_d = Array2.get p.Tensor.data ir ic in
-                Array2.set p.Tensor.data ir ic (old_d -. lr_t *. m_hat /. (sqrt v_hat +. eps));
-                Array2.set p.Tensor.grad ir ic 0.0
-              done 
-            done;
-            update pt mtt vtt
-        | _ -> ()
-      in
-      update params m v;
+      (* Adam Optimizer Step *)
+      Tensor.step_adam params m v step learning_rate num_steps beta1 beta2 eps;
 
       Printf.printf "step %4d / %4d | loss %.4f\r%!" (step + 1) num_steps avg_loss;
       train_loop (step + 1)
