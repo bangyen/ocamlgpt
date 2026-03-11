@@ -44,7 +44,8 @@ module Value = struct
       if v._visited then topo
       else begin
         v._visited <- true;
-        let topo' = List.fold_left (fun acc child -> build child acc) topo v._prev in
+        let inner = fun acc child -> build child acc in
+        let topo' = List.fold_left inner topo v._prev in
         v :: topo'
       end
     in
@@ -65,7 +66,8 @@ module Value = struct
 end
 
 (* Operator aliases for convenience *)
-let ( +: ), ( -: ), ( *: ), ( /: ) = Value.add, Value.sub, Value.mul, Value.div
+let ( +: ), ( -: ) = Value.add, Value.sub
+let ( *: ), ( /: ) = Value.mul, Value.div
 let ( +^ ), ( *^ ) = Array.map2 (+:), Array.map2 ( *:)
 let sum = Array.fold_left (+:) Value.zero
 
@@ -125,7 +127,9 @@ let bos_token = Array.length uchars
 let gauss mean std =
   let u1 = Random.float 1.0 in
   let u2 = Random.float 1.0 in
-  mean +. std *. sqrt (-2.0 *. log u1) *. cos (2.0 *. Float.pi *. u2)
+  mean +. std
+    *. sqrt (-2.0 *. log u1)
+    *. cos (2.0 *. Float.pi *. u2)
 
 let matrix ?(std = 0.08) rows cols =
   Array.init rows (fun _ -> 
@@ -147,7 +151,10 @@ let softmax logits =
 
 (* Cross-Entropy Loss: -log(p(target)) *)
 let cross_entropy logits target_id =
-  logits |> softmax |> fun p -> Value.log p.(target_id) |> Value.neg
+  logits
+    |> softmax
+    |> fun p -> Value.log p.(target_id)
+    |> Value.neg
 
 (* ReLU Activation: max(0, x) *)
 let relu = Array.map Value.relu
@@ -160,14 +167,19 @@ let rmsnorm x =
 
 (* --- GPT Forward Pass --- *)
 let gpt state token_id pos_id keys values =
-  let x = state.wte.(token_id) +^ state.wpe.(pos_id) |> rmsnorm in
+  let x = state.wte.(token_id)
+    +^ state.wpe.(pos_id)
+    |> rmsnorm in
 
   let rec apply_layers x li =
     if li = n_layer then x
     else
       let l = state.layers.(li) in
       let x_norm = x |> rmsnorm in
-      let q, k, v = x_norm |> linear l.wq, x_norm |> linear l.wk, x_norm |> linear l.wv in
+      let q, k, v =
+        x_norm |> linear l.wq,
+        x_norm |> linear l.wk,
+        x_norm |> linear l.wv in
       
       (* KV Caching: Store previous K/V for autoregressive inference/context *)
       keys.(li) <- keys.(li) @ [k];
@@ -211,7 +223,8 @@ let gpt state token_id pos_id keys values =
 
 (* Adam Optimizer Step *)
 let step_adam params m v step =
-  let lr_t = learning_rate *. (1.0 -. (float_of_int step /. float_of_int num_steps)) in
+  let lr_t = learning_rate *.
+    (1.0 -. (float_of_int step /. float_of_int num_steps)) in
   let b1_t = 1.0 -. (beta1 ** float_of_int (step + 1)) in
   let b2_t = 1.0 -. (beta2 ** float_of_int (step + 1)) in
   Array.iteri (fun i p ->
@@ -247,13 +260,18 @@ let main () =
   } in
 
   let collect_params s =
-    let flatten m = Array.to_list m |> List.concat_map Array.to_list in
-    let layer_params l = List.concat_map flatten [l.wq; l.wk; l.wv; l.wo; l.fc1; l.fc2] in
+    let flatten m =
+      Array.to_list m |> List.concat_map Array.to_list in
+    let layer_params l = List.concat_map flatten
+      [l.wq; l.wk; l.wv; l.wo; l.fc1; l.fc2]
+    in
     List.concat [
       flatten s.wte; 
       flatten s.wpe; 
       flatten s.lm_head; 
-      List.concat_map layer_params (Array.to_list s.layers)
+      List.concat_map
+        layer_params
+        (Array.to_list s.layers)
     ]
   in
   
@@ -267,8 +285,9 @@ let main () =
   let docs_shuffled = 
     let a = Array.copy docs in
     for i = Array.length a - 1 downto 1 do
+      let t = a.(i) in
       let j = Random.int (i + 1) in
-      let t = a.(i) in a.(i) <- a.(j); a.(j) <- t
+        a.(i) <- a.(j); a.(j) <- t
     done; 
     a
   in
@@ -276,7 +295,8 @@ let main () =
   let rec train_loop step =
     if step >= num_steps then ()
     else begin
-      let doc = docs_shuffled.(step mod Array.length docs_shuffled) in
+      let ind = step mod Array.length docs_shuffled in
+      let doc = docs_shuffled.(ind) in
       let tokens = 
         [bos_token] @ (String.to_seq doc |> Seq.map (fun c ->
           let rec find i = if uchars.(i) = c then i else find (i + 1) in find 0
@@ -319,9 +339,10 @@ let main () =
       let rec generate pos_id tid acc_tokens =
         if pos_id >= block_size then acc_tokens
         else
-          let logits = gpt state tid pos_id keys values in
           let scaled_logits = 
-            Array.map (fun v -> Value.scalar (Value.data v /. temperature)) logits 
+            Array.map
+              (fun v -> Value.scalar (Value.data v /. temperature))
+              (gpt state tid pos_id keys values)
           in
           let probs = softmax scaled_logits in
           let r = Random.float 1.0 in
