@@ -75,7 +75,7 @@ def main():
     
     print("Running OCaml Port...")
     # Using -w -40 to ignore some warnings during patching if any
-    subprocess.run("ocamlopt -w -40 -o micro_test_bin micro_test.ml", shell=True, check=True)
+    subprocess.run("ocamlopt -w -40-26 -o micro_test_bin micro_test.ml", shell=True, check=True)
     ml_losses, ml_samples = run_output("./micro_test_bin")
 
     success = True
