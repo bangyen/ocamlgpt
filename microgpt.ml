@@ -97,10 +97,24 @@ type state = {
   layers : layer array; 
 }
 
-(* Global Vocabulary State *)
-let vocab_size = ref 0
-let uchars = ref [||]
-let bos_token = ref 0
+(* --- Global Configuration & Vocabulary --- *)
+let () = Random.init 42
+
+let docs = 
+  if not (Sys.file_exists "input.txt") then
+    ignore (Sys.command "curl -s https://raw.githubusercontent.com/karpathy/makemore/988aa59/names.txt -o input.txt");
+  In_channel.with_open_text "input.txt" In_channel.input_lines
+  |> List.filter ((<>) "") 
+  |> Array.of_list
+
+let uchars = 
+  String.concat "" (Array.to_list docs)
+  |> String.to_seq |> List.of_seq 
+  |> List.sort_uniq Char.compare 
+  |> Array.of_list
+
+let vocab_size = Array.length uchars + 1
+let bos_token = Array.length uchars
 
 (* --- Initialization & Matrix Ops --- *)
 
@@ -187,39 +201,14 @@ let gpt state token_id pos_id keys values =
 (* --- Main Execution --- *)
 
 let main () =
-  Random.init 42;
-  
-  (* 1. Load Data (Minimalist) *)
-  if not (Sys.file_exists "input.txt") then begin
-    let link = "https://raw.githubusercontent.com/karpathy/makemore/988aa59/names.txt" in
-    let _ = Sys.command ("curl -s " ^ link ^ " -o input.txt") in
-    ()
-  end;
-  
-  let docs = 
-    In_channel.with_open_text "input.txt" In_channel.input_lines
-    |> List.filter ((<>) "") 
-    |> Array.of_list
-  in
-  
-  let all_chars = 
-    String.concat "" (Array.to_list docs)
-    |> String.to_seq |> List.of_seq 
-    |> List.sort_uniq Char.compare 
-  in
-  
-  uchars := Array.of_list all_chars;
-  vocab_size := Array.length !uchars + 1;
-  bos_token := Array.length !uchars;
-
   Printf.printf "num docs: %d\n" (Array.length docs);
-  Printf.printf "vocab size: %d\n" !vocab_size;
+  Printf.printf "vocab size: %d\n" vocab_size;
 
   (* 2. Initialize Model *)
   let state = {
-    wte     = matrix !vocab_size n_embd;
+    wte     = matrix vocab_size n_embd;
     wpe     = matrix block_size n_embd;
-    lm_head = matrix !vocab_size n_embd;
+    lm_head = matrix vocab_size n_embd;
     layers  = Array.init n_layer (fun _ -> {
       wq  = matrix n_embd n_embd;
       wk  = matrix n_embd n_embd;
@@ -262,9 +251,9 @@ let main () =
     else begin
       let doc = docs_shuffled.(step mod Array.length docs_shuffled) in
       let tokens = 
-        [!bos_token] @ (String.to_seq doc |> Seq.map (fun c ->
-          let rec find i = if !uchars.(i) = c then i else find (i + 1) in find 0
-        ) |> List.of_seq) @ [!bos_token] 
+        [bos_token] @ (String.to_seq doc |> Seq.map (fun c ->
+          let rec find i = if uchars.(i) = c then i else find (i + 1) in find 0
+        ) |> List.of_seq) @ [bos_token] 
       in
       let n = min block_size (List.length tokens - 1) in
 
@@ -325,16 +314,16 @@ let main () =
           let probs = softmax scaled_logits in
           let r = Random.float 1.0 in
           let rec sample_prob i cum =
-            if i >= !vocab_size then !bos_token else
+            if i >= vocab_size then bos_token else
             let cum = cum +. Value.data probs.(i) in
             if r <= cum then i else sample_prob (i + 1) cum
           in
           let next_id = sample_prob 0 0.0 in
-          if next_id = !bos_token then tokens
+          if next_id = bos_token then tokens
           else generate (pos_id + 1) (tokens @ [next_id])
       in
-      let sample_ids = generate 0 [!bos_token] |> List.tl in
-      let sample_chars = List.map (fun id -> !uchars.(id)) sample_ids in
+      let sample_ids = generate 0 [bos_token] |> List.tl in
+      let sample_chars = List.map (fun id -> uchars.(id)) sample_ids in
       let sample_str = String.of_seq (List.to_seq sample_chars) in
       Printf.printf "sample %2d: %s\n" sample_idx sample_str;
       infer_loop (sample_idx + 1)

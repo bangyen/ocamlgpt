@@ -355,6 +355,23 @@ let n_layer, n_embd, block_size, n_head = 1, 16, 16, 4
 let head_dim, learning_rate, num_steps = n_embd / n_head, 0.01, 1000
 let beta1, beta2, eps = 0.85, 0.99, 1e-8
 
+let () = Random.init 42
+
+let docs = 
+  if not (Sys.file_exists "input.txt") then
+    ignore (Sys.command "curl -s https://raw.githubusercontent.com/karpathy/makemore/988aa59/names.txt -o input.txt");
+  In_channel.with_open_text "input.txt" In_channel.input_lines
+  |> List.filter ((<>) "") |> Array.of_list
+
+let uchars = 
+  String.concat "" (Array.to_list docs) 
+  |> String.to_seq |> List.of_seq 
+  |> List.sort_uniq Char.compare 
+  |> Array.of_list
+
+let vocab_size = Array.length uchars + 1
+let bos_token = Array.length uchars
+
 (* --- Model State --- *)
 type layer = {
   wq : Tensor.t; 
@@ -466,25 +483,6 @@ let gpt state tid pid keys values =
 
 (* --- Main Execution --- *)
 let main () =
-  Random.init 42;
-  
-  (* 1. Load Data (Minimalist) *)
-  if not (Sys.file_exists "input.txt") then
-    ignore (Sys.command "curl -s https://raw.githubusercontent.com/karpathy/makemore/988aa59/names.txt -o input.txt");
-  
-  let docs = 
-    In_channel.with_open_text "input.txt" In_channel.input_lines
-    |> List.filter ((<>) "") |> Array.of_list
-  in
-  let all_chars = 
-    String.concat "" (Array.to_list docs) 
-    |> String.to_seq |> List.of_seq 
-    |> List.sort_uniq Char.compare 
-  in
-  let uchars = Array.of_list all_chars in
-  let vocab_size = Array.length uchars + 1 in
-  let bos_token = Array.length uchars in
-
   Printf.printf "num docs: %d\n" (Array.length docs);
   Printf.printf "vocab size: %d\n" vocab_size;
 
