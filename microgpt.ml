@@ -115,12 +115,13 @@ let matrix ?(std = 0.08) rows cols =
     Array.init cols (fun _ -> Value.scalar (gauss 0.0 std))
   )
 
+(* Dot Product: a . b *)
+let dot a b =
+  Seq.fold_left2 (fun acc va vb -> acc +: (va *: vb))
+    Value.zero (Array.to_seq a) (Array.to_seq b)
+
 (* Linear Layer: y = xW^T (Arguments flipped for pipelining) *)
-let linear w x =
-  Array.map (fun row ->
-    Seq.fold_left2 (fun a b c -> a +: (b *: c))
-      Value.zero (Array.to_seq x) (Array.to_seq row)
-  ) w
+let linear w x = Array.map (dot x) w
 
 (* Softmax: exp(xi) / sum(exp(xj)) *)
 let softmax logits =
@@ -162,9 +163,7 @@ let gpt state token_id pos_id keys values =
 
         let attn_weights = 
           k_h |> List.map (fun kh ->
-            Seq.fold_left2 (fun a b c -> a +: (b *: c))
-              Value.zero (Array.to_seq q_h) (Array.to_seq kh)
-            /: Value.scalar (sqrt (float head_dim))
+            dot q_h kh /: Value.scalar (sqrt (float head_dim))
           ) |> Array.of_list |> softmax
         in
         

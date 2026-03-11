@@ -44,6 +44,7 @@ module Tensor = struct
       end
     in
     let topo = build root [] in
+    set root.grad 0 0 1.0;
     root.visited <- false;
     List.iter (fun v ->
       v._backward ();
@@ -279,6 +280,59 @@ module Tensor = struct
     let r, c = dim1 x.data, dim2 x.data in 
     let out = create r c in rmsnorm_into out x; out
 
+  let cross_entropy_into out logits target =
+    let probs = create 1 (dim2 logits.data) in
+    softmax_into probs logits;
+    let loss_val = -. log (get probs.data 0 target +. 1e-10) in
+    set out.data 0 0 loss_val;
+    out._prev <- [logits];
+    out._backward <- (fun () ->
+      let g = get out.grad 0 0 in
+      let c = dim2 logits.data in
+      for i = 0 to c - 1 do
+        let si = get probs.data 0 i in
+        let delta = if i = target then si -. 1.0 else si in
+        set logits.grad 0 i (get logits.grad 0 i +. g *. delta)
+      done
+    )
+
+  let cross_entropy logits target =
+    let out = create 1 1 in cross_entropy_into out logits target; out
+
+  let mean_into out xs =
+    let n = float (List.length xs) in
+    let sum = ref 0.0 in
+    List.iter (fun x -> sum := !sum +. get x.data 0 0) xs;
+    set out.data 0 0 (!sum /. n);
+    out._prev <- xs;
+    out._backward <- (fun () ->
+      let g = get out.grad 0 0 /. n in
+      List.iter (fun x -> set x.grad 0 0 (get x.grad 0 0 +. g)) xs
+    )
+
+  let mean xs =
+    let out = create 1 1 in mean_into out xs; out
+
+  let mul_scalar_into out x s =
+    let r, c = dim1 x.data, dim2 x.data in
+    for i = 0 to r - 1 do
+      for j = 0 to c - 1 do
+        set out.data i j (get x.data i j *. s)
+      done
+    done;
+    out._prev <- [x];
+    out._backward <- (fun () ->
+      for i = 0 to r - 1 do
+        for j = 0 to c - 1 do
+          set x.grad i j (get x.grad i j +. get out.grad i j *. s)
+        done
+      done
+    )
+
+  let mul_scalar x s =
+    let r, c = dim1 x.data, dim2 x.data in
+    let out = create r c in mul_scalar_into out x s; out
+
   let softmax ?len x = 
     let r, c = dim1 x.data, dim2 x.data in 
     let out = create r c in softmax_into ?len out x; out
@@ -355,18 +409,9 @@ let gpt state tid pid keys values =
           let k_h = List.map (fun ki -> Tensor.slice_col ki hs head_dim) keys.(li) in
           let v_h = List.map (fun vi -> Tensor.slice_col vi hs head_dim) values.(li) in
           
+          let scale_factor = 1.0 /. sqrt (float_of_int head_dim) in
           let attn_logits_list = List.map (fun kh ->
-            let dot = Tensor.dot_product q_h kh in
-            let scaled_dot = Tensor.create 1 1 in
-            let scale_factor = sqrt (float_of_int head_dim) in
-            Tensor.set_entry scaled_dot 0 0 (Tensor.entry dot 0 0 /. scale_factor);
-            scaled_dot.Tensor._prev <- [dot];
-            scaled_dot.Tensor._backward <- (fun () ->
-              let g = Array2.get scaled_dot.Tensor.grad 0 0 in
-              let old_g = Array2.get dot.Tensor.grad 0 0 in
-              Array2.set dot.Tensor.grad 0 0 (old_g +. g /. scale_factor)
-            );
-            scaled_dot
+            Tensor.mul_scalar (Tensor.dot_product q_h kh) scale_factor
           ) k_h in
           
           let attn_logits = Tensor.create 1 (List.length k_h) in
@@ -516,35 +561,13 @@ let main () =
         List.init n (fun pos_id ->
           let tid, target = List.nth tokens pos_id, List.nth tokens (pos_id + 1) in
           let logits = gpt state tid pos_id keys values in
-          let probs = Tensor.softmax logits in
-          let loss_val = -. log (Tensor.entry probs 0 target +. 1e-10) in
-          let node = Tensor.create 1 1 in 
-          Tensor.set_entry node 0 0 loss_val;
-          node.Tensor._prev <- [logits];
-          node.Tensor._backward <- (fun () ->
-            let g = Array2.get node.Tensor.grad 0 0 in
-            for i = 0 to vocab_size - 1 do
-              let si = Tensor.entry probs 0 i in
-              let delta = if i = target then si -. 1.0 else si in
-              let old_g = Array2.get logits.Tensor.grad 0 i in
-              Array2.set logits.Tensor.grad 0 i (old_g +. g *. delta)
-            done
-          );
-          node
+          Tensor.cross_entropy logits target
         )
       in
 
-      let avg_loss_node = Tensor.create 1 1 in
-      let total_loss_val = List.fold_left (fun acc l -> acc +. Tensor.entry l 0 0) 0.0 losses in
-      Tensor.set_entry avg_loss_node 0 0 (total_loss_val /. float_of_int n);
-      avg_loss_node.Tensor._prev <- losses;
-      avg_loss_node.Tensor._backward <- (fun () ->
-        List.iter (fun (l : Tensor.t) -> 
-          Array2.set l.grad 0 0 (1.0 /. float_of_int n)
-        ) losses
-      );
+      let avg_loss_node = Tensor.mean losses in
       Tensor.backward avg_loss_node;
-      let avg_loss = total_loss_val /. float_of_int n in
+      let avg_loss = Tensor.entry avg_loss_node 0 0 in
 
       (* Adam Update Matching microgpt.ml *)
       let lr_t = learning_rate *. (1.0 -. (float_of_int step /. float_of_int num_steps)) in
