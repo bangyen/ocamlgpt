@@ -268,19 +268,17 @@ let main () =
 
     let keys   = Array.make n_layer [] in
     let values = Array.make n_layer [] in
-    let losses = ref [] in
 
-    for pos_id = 0 to n - 1 do
-      let token_id = List.nth tokens pos_id in
-      let target_id = List.nth tokens (pos_id + 1) in
-      let logits = gpt state token_id pos_id keys values in
-      let loss = 
-        logits |> softmax |> fun p -> Value.log p.(target_id) |> Value.neg 
-      in
-      losses := loss :: !losses
-    done;
+    let losses = 
+      List.init n (fun pos_id ->
+        let token_id  = List.nth tokens pos_id in
+        let target_id = List.nth tokens (pos_id + 1) in
+        let logits    = gpt state token_id pos_id keys values in
+        logits |> softmax |> fun p -> Value.log p.(target_id) |> Value.neg
+      )
+    in
     
-    let total_loss = List.fold_left (+:) Value.zero !losses in
+    let total_loss = List.fold_left (+:) Value.zero losses in
     let avg_loss = total_loss /: (Value.scalar (float_of_int n)) in
 
     Value.backward avg_loss;
@@ -308,13 +306,11 @@ let main () =
   for sample_idx = 1 to 20 do
     let keys     = Array.make n_layer [] in
     let values   = Array.make n_layer [] in
-    let token_id = ref !bos_token in
-    let sample   = ref [] in
-
-    let rec generate pos_id =
-      if pos_id >= block_size then ()
+    let rec generate pos_id tokens =
+      if pos_id >= block_size then tokens
       else
-        let logits = gpt state !token_id pos_id keys values in
+        let token_id = List.hd (List.rev tokens) in
+        let logits = gpt state token_id pos_id keys values in
         let scaled_logits = 
           Array.map (fun v -> Value.scalar (Value.data v /. temperature)) logits 
         in
@@ -325,16 +321,15 @@ let main () =
           let cum = cum +. Value.data probs.(i) in
           if r <= cum then i else sample_prob (i + 1) cum
         in
-        token_id := sample_prob 0 0.0;
-        if !token_id <> !bos_token then begin
-          sample := !sample @ [!uchars.(!token_id)]; 
-          generate (pos_id + 1)
-        end
+        let next_id = sample_prob 0 0.0 in
+        if next_id = !bos_token then tokens
+        else generate (pos_id + 1) (tokens @ [next_id])
     in
-    generate 0;
+    let sample_ids = generate 0 [!bos_token] |> List.tl in
+    let sample_chars = List.map (fun id -> !uchars.(id)) sample_ids in
     Printf.printf
       "sample %2d: %s\n" sample_idx
-      (String.of_seq (List.to_seq !sample))
+      (String.of_seq (List.to_seq sample_chars))
   done
 
 let () = main ()
