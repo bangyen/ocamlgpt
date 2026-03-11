@@ -576,7 +576,8 @@ let main () =
     end
   in
   train_loop 0;
-  
+  (* 4. Inference *)
+  Printf.printf "\n--- inference (new, hallucinated names) ---\n";
   let rec infer_loop i =
     if i > 20 then ()
     else begin
