@@ -66,7 +66,8 @@ end
 
 (* Operator aliases for convenience *)
 let ( +: ), ( -: ), ( *: ), ( /: ) = Value.add, Value.sub, Value.mul, Value.div
-let ( +^ ) = Array.map2 (+:)
+let ( +^ ), ( *^ ) = Array.map2 (+:), Array.map2 ( *:)
+let sum = Array.fold_left (+:) Value.zero
 
 (* --- Configuration --- *)
 let n_layer       = 1               (* Number of transformer blocks *)
@@ -131,10 +132,8 @@ let matrix ?(std = 0.08) rows cols =
     Array.init cols (fun _ -> Value.scalar (gauss 0.0 std))
   )
 
-(* Dot Product: a . b *)
-let dot a b =
-  Seq.fold_left2 (fun acc va vb -> acc +: (va *: vb))
-    Value.zero (Array.to_seq a) (Array.to_seq b)
+(* Dot Product: sum(a * b) *)
+let dot a b = a *^ b |> sum
 
 (* Linear Layer: y = xW^T (Arguments flipped for pipelining) *)
 let linear w x = Array.map (dot x) w
@@ -143,7 +142,7 @@ let linear w x = Array.map (dot x) w
 let softmax logits =
   let max_val = Array.fold_left (fun m v -> max m (Value.data v)) (-.infinity) logits in
   let exps = Array.map (fun v -> Value.exp (v -: Value.scalar max_val)) logits in
-  let total = Array.fold_left (+:) Value.zero exps in
+  let total = sum exps in
   Array.map (fun e -> e /: total) exps
 
 (* Cross-Entropy Loss: -log(p(target)) *)
@@ -296,7 +295,7 @@ let main () =
         )
       in
       
-      let total_loss = List.fold_left (+:) Value.zero losses in
+      let total_loss = losses |> Array.of_list |> sum in
       let avg_loss = total_loss /: (Value.scalar (float_of_int n)) in
 
       Value.backward avg_loss;

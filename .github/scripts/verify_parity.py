@@ -8,12 +8,10 @@ import sys
 REF_URL = "https://gist.githubusercontent.com/karpathy/8627fe009c40f57531cb18360106ce95/raw/microgpt.py"
 
 def download_reference():
-    print(f"Downloading reference Python implementation from {REF_URL}...")
     with urllib.request.urlopen(REF_URL) as response:
         return response.read().decode('utf-8')
 
 def patch_python(content):
-    print("Patching Python reference...")
     content = re.sub(r'random\.shuffle\(docs\)', '# random.shuffle(docs)', content)
     content = re.sub(r'random\.gauss\([^)]+\)', '0.02', content)
     content = re.sub(r'\bnum_steps\s*=\s*\d+', 'num_steps = 10', content)
@@ -24,7 +22,6 @@ def patch_python(content):
     return content
 
 def patch_ocaml(content):
-    print("Patching OCaml port...")
     content = re.sub(r'gauss\s+0\.0\s+std', '0.02', content)
     content = re.sub(r'let gauss.*?\(2\.0 \*\. Float\.pi \*\. u2\)', 'let gauss mean std = 0.02', content, flags=re.DOTALL)
     
@@ -70,10 +67,8 @@ def main():
     with open('micro_test.ml', 'w') as f:
         f.write(patch_ocaml(ml_content))
 
-    print("Running Python Reference...")
     py_losses, py_samples = run_output("python3 ref.py")
     
-    print("Running OCaml Port...")
     # Using -w -40 to ignore some warnings during patching if any
     subprocess.run("ocamlopt -w -40-26 -o micro_test_bin micro_test.ml", shell=True, check=True)
     ml_losses, ml_samples = run_output("./micro_test_bin")
@@ -92,7 +87,7 @@ def main():
                 print(f"Step {i+1}: Python={p}, OCaml={m}")
         success = False
     else:
-        print(f"SUCCESS: Mathematical Parity Verified for {len(py_losses)} steps!")
+        print(f"SUCCESS: Loss Parity Verified for {len(py_losses)} steps!")
 
     if not py_samples or not ml_samples:
         print("FAILURE: Could not extract samples.")
