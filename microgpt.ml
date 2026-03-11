@@ -6,29 +6,10 @@
    - Optimizer: Adam with linear learning rate decay.
 *)
 
-module type ENGINE = sig
-  type t
-  val create : ?prev:t list -> ?op_grad:float list -> float -> t
-  val add : t -> t -> t
-  val sub : t -> t -> t
-  val mul : t -> t -> t
-  val div : t -> t -> t
-  val neg : t -> t
-  val pow : t -> float -> t
-  val exp : t -> t
-  val log : t -> t
-  val relu : t -> t
-  val backward : t -> unit
-  val data : t -> float
-  val grad : t -> float
-  val set_data : t -> float -> unit
-  val set_grad : t -> float -> unit
-end
-
 (* --- Scalar Autograd Engine --- 
    This module tracks a computation graph of scalar values to compute gradients via reverse-mode AD.
 *)
-module Value : ENGINE = struct
+module Value = struct
   type t = {
     mutable data : float;
     mutable grad : float;

@@ -65,39 +65,6 @@ module Tensor = struct
       done
     )
 
-  let matmul_into out a b =
-    let ar, ac = Array2.dim1 a.data, Array2.dim2 a.data in
-    let bc = Array2.dim2 b.data in
-    for i = 0 to ar - 1 do
-      for j = 0 to bc - 1 do
-        let acc = ref 0.0 in
-        for k = 0 to ac - 1 do
-          acc := !acc +. (Array2.get a.data i k *. Array2.get b.data k j)
-        done;
-        Array2.set out.data i j !acc
-      done
-    done;
-    out._prev <- [a; b];
-    out._backward <- (fun () ->
-      for i = 0 to ar - 1 do
-        for k = 0 to ac - 1 do
-          let acc = ref 0.0 in
-          for j = 0 to bc - 1 do
-            acc := !acc +. (Array2.get out.grad i j *. Array2.get b.data k j)
-          done;
-          Array2.set a.grad i k (Array2.get a.grad i k +. !acc)
-        done
-      done;
-      for k = 0 to ac - 1 do
-        for j = 0 to bc - 1 do
-          let acc = ref 0.0 in
-          for i = 0 to ar - 1 do
-            acc := !acc +. (Array2.get a.data i k *. Array2.get out.grad i j)
-          done;
-          Array2.set b.grad k j (Array2.get b.grad k j +. !acc)
-        done
-      done
-    )
  
   let matmul_transposed_into out a b =
     let ar, ac = Array2.dim1 a.data, Array2.dim2 a.data in
@@ -302,10 +269,6 @@ module Tensor = struct
     let r, c = Array2.dim1 a.data, Array2.dim2 a.data in 
     let out = create r c in add_into out a b; out
 
-  let matmul a b = 
-    let ar = Array2.dim1 a.data in 
-    let bc = Array2.dim2 b.data in 
-    let out = create ar bc in matmul_into out a b; out
 
   let rmsnorm x = 
     let r, c = Array2.dim1 x.data, Array2.dim2 x.data in 
