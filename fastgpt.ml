@@ -574,20 +574,18 @@ let main () =
       let tokens = [bos_token] @ (String.to_seq doc |> Seq.map (fun c ->
         let rec find i = if uchars.(i) = c then i else find (i + 1) in find 0
       ) |> List.of_seq) @ [bos_token] in
-      let n = min block_size (List.length tokens - 1) in
-      
       (* Reset gradients *)
       List.iter Tensor.zero_grad params;
 
       let keys, values = Array.make n_layer [], Array.make n_layer [] in
 
-      let losses = 
-        List.init n (fun pos_id ->
-          let tid, target = List.nth tokens pos_id, List.nth tokens (pos_id + 1) in
-          let logits = gpt state tid pos_id keys values in
-          Tensor.cross_entropy logits target
-        )
+      let rec zip_loss pos_id = function
+        | t1 :: t2 :: ts when pos_id < block_size ->
+            let logits = gpt state t1 pos_id keys values in
+            Tensor.cross_entropy logits t2 :: zip_loss (pos_id + 1) (t2 :: ts)
+        | _ -> []
       in
+      let losses = zip_loss 0 tokens in
 
       let avg_loss_node = Tensor.mean losses in
       Tensor.backward avg_loss_node;
@@ -606,11 +604,9 @@ let main () =
   let rec infer_loop i =
     if i > 20 then ()
     else begin
-      let rec gen tokens keys values =
-        if List.length tokens > 15 then tokens
+      let rec gen pos_id tid acc_tokens keys values =
+        if pos_id > 14 then acc_tokens
         else
-          let tid = List.hd (List.rev tokens) in
-          let pos_id = List.length tokens - 1 in
           let logits = gpt state tid pos_id keys values in
           for j = 0 to vocab_size - 1 do 
             Tensor.set_entry logits 0 j (Tensor.entry logits 0 j /. 0.5) 
@@ -623,11 +619,11 @@ let main () =
             if r <= cum then i else sample_prob (i + 1) cum
           in
           let next_id = sample_prob 0 0.0 in
-          if next_id = bos_token then tokens 
-          else gen (tokens @ [next_id]) keys values
+          if next_id = bos_token then acc_tokens 
+          else gen (pos_id + 1) next_id (acc_tokens @ [next_id]) keys values
       in
       let keys, values = Array.make n_layer [], Array.make n_layer [] in
-      let tokens = gen [bos_token] keys values in
+      let tokens = gen 0 bos_token [] keys values in
       let name = 
         List.filter (fun t -> t <> bos_token) tokens 
         |> List.map (fun t -> uchars.(t)) |> List.to_seq |> String.of_seq 
