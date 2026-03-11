@@ -282,19 +282,17 @@ let main () =
           let rec find i = if uchars.(i) = c then i else find (i + 1) in find 0
         ) |> List.of_seq) @ [bos_token] 
       in
-      let n = min block_size (List.length tokens - 1) in
-
       let keys   = Array.make n_layer [] in
       let values = Array.make n_layer [] in
-
-      let losses = 
-        List.init n (fun pos_id ->
-          let token_id  = List.nth tokens pos_id in
-          let target_id = List.nth tokens (pos_id + 1) in
-          cross_entropy (gpt state token_id pos_id keys values) target_id
-        )
+      let rec zip_loss pos_id = function
+        | t1 :: t2 :: ts when pos_id < block_size ->
+            let l = cross_entropy (gpt state t1 pos_id keys values) t2 in
+            l :: zip_loss (pos_id + 1) (t2 :: ts)
+        | _ -> []
       in
+      let losses = zip_loss 0 tokens in
       
+      let n = List.length losses in
       let total_loss = losses |> Array.of_list |> sum in
       let avg_loss = total_loss /: (Value.scalar (float_of_int n)) in
 
@@ -318,11 +316,10 @@ let main () =
     else begin
       let keys     = Array.make n_layer [] in
       let values   = Array.make n_layer [] in
-      let rec generate pos_id tokens =
-        if pos_id >= block_size then tokens
+      let rec generate pos_id tid acc_tokens =
+        if pos_id >= block_size then acc_tokens
         else
-          let token_id = List.hd (List.rev tokens) in
-          let logits = gpt state token_id pos_id keys values in
+          let logits = gpt state tid pos_id keys values in
           let scaled_logits = 
             Array.map (fun v -> Value.scalar (Value.data v /. temperature)) logits 
           in
@@ -334,10 +331,10 @@ let main () =
             if r <= cum then i else sample_prob (i + 1) cum
           in
           let next_id = sample_prob 0 0.0 in
-          if next_id = bos_token then tokens
-          else generate (pos_id + 1) (tokens @ [next_id])
+          if next_id = bos_token then acc_tokens
+          else generate (pos_id + 1) next_id (acc_tokens @ [next_id])
       in
-      let sample_ids = generate 0 [bos_token] |> List.tl in
+      let sample_ids = generate 0 bos_token [] in
       let sample_chars = List.map (fun id -> uchars.(id)) sample_ids in
       let sample_str = String.of_seq (List.to_seq sample_chars) in
       Printf.printf "sample %2d: %s\n" sample_idx sample_str;
