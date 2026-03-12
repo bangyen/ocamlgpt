@@ -33,7 +33,7 @@ def patch_ocaml(content):
     content = content.replace('\\r%!', '\\n%!')
 
     # Deterministic sampling
-    content = re.sub(r'(let next_id = |match )sample 0 0\.0 (in|with)', r'\g<1>0 \g<2>', content)
+    content = re.sub(r'let sample probs =.*?in loop 0 0\.0', 'let sample _ = 0', content, flags=re.DOTALL)
     return content
 
 def run_output(cmd):

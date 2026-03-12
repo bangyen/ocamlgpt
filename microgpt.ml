@@ -242,27 +242,28 @@ let zip_loss state keys values =
   in
   loop 0
 
-let generate state temperature keys values =
-  let rec loop pos_id tid acc =
-    if pos_id >= block_size
-    then List.rev acc else
+(* Multinomial sampling: picks an index i with probability probs.(i) *)
+let sample probs =
+  let r = Random.float 1.0 in
+  let rec loop i cum =
+    let cum' = cum +. Value.data probs.(i) in
+    if r <= cum' || i = Array.length probs - 1
+    then i else loop (i + 1) cum'
+  in loop 0 0.0
 
-    let probs =
-      gpt state tid pos_id keys values
+let generate state temperature keys values =
+  let rec loop pos tid acc =
+    if pos >= block_size
+    then List.rev acc else
+    let next_id =
+      gpt state tid pos keys values
       |> Array.map (fun v -> Value.scalar
         (Value.data v /. temperature))
-      |> softmax in
-
-    let r = Random.float 1.0 in
-    let rec sample i cum =
-      let cum' = cum +. Value.data probs.(i) in
-      if r <= cum' || i = vocab_size - 1
-      then i else sample (i + 1) cum'
+      |> softmax
+      |> sample
     in
-
-    match sample 0 0.0 with
-    | next_id when next_id = bos_token -> List.rev acc
-    | next_id -> loop (pos_id + 1) next_id (next_id :: acc)
+    if next_id = bos_token then List.rev acc
+    else loop (pos + 1) next_id (next_id :: acc)
   in
   loop 0 bos_token []
 
