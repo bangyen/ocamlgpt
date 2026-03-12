@@ -1,10 +1,5 @@
-(*
-   fastgpt.ml - Hyper-optimized, parallelized GPT-2 implementation in OCaml.
-
-   Performance-oriented design:
-   - Taped Autograd: Vectorized engine using Bigarrays and closure-based "tapes".
-   - Parallelism: Native OCaml 5 Domain pool for multi-core scaling.
-*)
+(* fastgpt.ml - Vectorized GPT-2 implementation with native multi-core scaling.
+   Performance: Taped Autograd + Bigarrays + Domain Parallelism. *)
 
 open Bigarray
 
@@ -13,7 +8,7 @@ let set  = Array2.set
 let dim1 = Array2.dim1
 let dim2 = Array2.dim2
 
-(* --- Vectorized Autograd Engine --- *)
+(* --- Autograd --- *)
 module Tensor = struct
   type t = {
     data : (float, float64_elt, c_layout) Array2.t;
@@ -23,18 +18,21 @@ module Tensor = struct
     mutable visited : bool;
   }
 
+  (** Create a new tensor with specified dimensions. *)
   let create r c =
     let data = Array2.create Float64 c_layout r c in
     let grad = Array2.create Float64 c_layout r c in
     Array2.fill data 0.0;
     Array2.fill grad 0.0;
-    (* _backward stores a closure that propagates gradients to children (The "Tape") *)
+    (* Closure to propagate gradients ("Tape"). *)
     { data; grad; _prev = []; _backward = (fun () -> ()); visited = false }
 
   let entry x r c = get x.data r c
+  (** Set a single entry in a tensor. *)
   let set_entry x r c v = set x.data r c v
 
-  (** backward: Reverse-mode autodiff: traverse the graph in reverse topological order. *)
+  (** Reverse-mode AD (topological traversal). *)
+  let backward root =
     let rec build v topo =
       if v.visited then topo
       else begin
@@ -51,8 +49,10 @@ module Tensor = struct
       v.visited <- false
     ) topo
 
+  (** Reset gradients to zero. *)
   let zero_grad x = Array2.fill x.grad 0.0
 
+  (** Element-wise addition into an output tensor. *)
   let add_into out a b =
     let r, c = dim1 a.data, dim2 a.data in
     for i = 0 to r - 1 do
@@ -70,8 +70,7 @@ module Tensor = struct
         done
       done
     )
-
-
+  (** Transposed matrix multiplication into an output tensor. *)
   let matmul_transposed_into out a b =
     let ar, ac = dim1 a.data, dim2 a.data in
     let br, bc = dim1 b.data, dim2 b.data in
@@ -105,12 +104,13 @@ module Tensor = struct
         done
       done
     )
-
+  (** Transposed matrix multiplication. *)
   let matmul_transposed a b =
     let ar = dim1 a.data in
     let br = dim1 b.data in
     let out = create ar br in matmul_transposed_into out a b; out
 
+  (** Root Mean Square Layer Normalization into an output tensor. *)
   let rmsnorm_into out x =
     let r, c = dim1 x.data, dim2 x.data in
     for i = 0 to r - 1 do
@@ -143,7 +143,7 @@ module Tensor = struct
         done
       done
     )
-
+  (** ReLU activation function into an output tensor. *)
   let relu_into out x =
     let r, c = dim1 x.data, dim2 x.data in
     for i = 0 to r - 1 do
@@ -160,7 +160,7 @@ module Tensor = struct
         done
       done
     )
-
+  (** Softmax normalization into an output tensor. *)
   let softmax_into ?len out x =
     let r, full_c = dim1 x.data, dim2 x.data in
     let c = match len with Some l -> l | None -> full_c in
@@ -194,7 +194,7 @@ module Tensor = struct
         done
       done
     )
-
+  (** Extract a row into a 1xC tensor. *)
   let slice_row_into out x row =
     let _, c = dim1 x.data, dim2 x.data in
     for j = 0 to c - 1 do
@@ -206,7 +206,7 @@ module Tensor = struct
         set x.grad row j (get x.grad row j +. get out.grad 0 j)
       done
     )
-
+  (** Extract a range of columns into an RxN tensor. *)
   let slice_col_into out x col len =
     let r, _ = dim1 x.data, dim2 x.data in
     for i = 0 to r - 1 do
@@ -222,7 +222,7 @@ module Tensor = struct
         done
       done
     )
-
+  (** Dot product between two 1xC tensors. *)
   let dot_product_into out a b =
     let c = dim2 a.data in
     let acc = ref 0.0 in
@@ -239,9 +239,11 @@ module Tensor = struct
       done
     )
 
+  (** Scalar dot product. *)
   let dot_product a b =
     let out = create 1 1 in dot_product_into out a b; out
 
+  (** Compute a weighted sum of tensors. *)
   let weighted_sum_into out weights values =
     (* weights: 1xT, values: list of 1xH tensors *)
     let h = dim2 out.data in
@@ -271,15 +273,17 @@ module Tensor = struct
     let h = dim2 (List.hd values).data in
     let out = create 1 h in weighted_sum_into out weights values; out
 
+  (** Element-wise addition. *)
   let add a b =
     let r, c = dim1 a.data, dim2 a.data in
     let out = create r c in add_into out a b; out
 
-
-  (** rmsnorm: Root Mean Square Layer Normalization. *)
+  (** Root Mean Square Layer Normalization. *)
+  let rmsnorm x =
     let r, c = dim1 x.data, dim2 x.data in
     let out = create r c in rmsnorm_into out x; out
 
+  (** Cross-entropy loss into an output tensor. *)
   let cross_entropy_into out logits target =
     let probs = create 1 (dim2 logits.data) in
     softmax_into probs logits;
@@ -296,9 +300,11 @@ module Tensor = struct
       done
     )
 
+  (** Cross-entropy loss between logits and target. *)
   let cross_entropy logits target =
     let out = create 1 1 in cross_entropy_into out logits target; out
 
+  (** Compute the mean loss from a list of scalar tensors. *)
   let mean_into out xs =
     let n = float (List.length xs) in
     let sum = ref 0.0 in
@@ -313,6 +319,7 @@ module Tensor = struct
   let mean xs =
     let out = create 1 1 in mean_into out xs; out
 
+  (** Scalar multiplication into an output tensor. *)
   let mul_scalar_into out x s =
     let r, c = dim1 x.data, dim2 x.data in
     for i = 0 to r - 1 do
@@ -333,22 +340,27 @@ module Tensor = struct
     let r, c = dim1 x.data, dim2 x.data in
     let out = create r c in mul_scalar_into out x s; out
 
+  (** Softmax normalization. *)
   let softmax ?len x =
     let r, c = dim1 x.data, dim2 x.data in
     let out = create r c in softmax_into ?len out x; out
 
+  (** ReLU activation function. *)
   let relu x =
     let r, c = dim1 x.data, dim2 x.data in
     let out = create r c in relu_into out x; out
 
+  (** Extract a row. *)
   let slice_row x r =
     let c = dim2 x.data in
     let out = create 1 c in slice_row_into out x r; out
 
+  (** Extract a column range. *)
   let slice_col x c len =
     let r = dim1 x.data in
     let out = create r len in slice_col_into out x c len; out
 
+  (** Stack list of scalar tensors into a row vector. *)
   let stack_scalars_into out xs =
     List.iteri (fun i x -> set out.data 0 i (get x.data 0 0)) xs;
     out._prev <- xs;
@@ -361,6 +373,7 @@ module Tensor = struct
   let stack_scalars xs =
     let out = create 1 (List.length xs) in stack_scalars_into out xs; out
 
+  (** Concatenate tensors along the column dimension. *)
   let concat_cols_into out xs =
     let h = dim2 (List.hd xs).data in
     List.iteri (fun i x ->
@@ -383,6 +396,7 @@ module Tensor = struct
     let h = dim2 (List.hd xs).data in
     let out = create 1 (List.length xs * h) in concat_cols_into out xs; out
 
+  (** Update parameters using the Adam optimizer. *)
   let step_adam params m_list v_list step learning_rate num_steps beta1 beta2 eps =
     let lr_t = learning_rate *. (1.0 -. (float_of_int step /. float_of_int num_steps)) in
     let rec update ps m v =
@@ -409,7 +423,7 @@ module Tensor = struct
     update params m_list v_list
 end
 
-(* --- Configuration --- *)
+(* --- Config --- *)
 let n_layer, n_embd, block_size, n_head = 1, 16, 16, 4
 let head_dim, learning_rate, num_steps = n_embd / n_head, 0.01, 1000
 let beta1, beta2, eps = 0.85, 0.99, 1e-8
@@ -432,7 +446,7 @@ let uchars =
 let vocab_size = Array.length uchars + 1
 let bos_token = Array.length uchars
 
-(* --- Model State --- *)
+(* --- State --- *)
 type layer = {
   wq : Tensor.t;
   wk : Tensor.t;
@@ -449,17 +463,19 @@ type state = {
   layers : layer array;
 }
 
-(* --- Initialization Helpers --- *)
-
+(* --- Initialization & Matrix Ops --- *)
+(** Box-Muller Gaussian sampling. *)
 let gauss mean std =
   let u1 = Random.float 1.0 in
   let u2 = Random.float 1.0 in
   mean +. std *. sqrt (-2.0 *. log u1) *. cos (2.0 *. Float.pi *. u2)
 
+(** Linear transformation: y = xW^T. *)
 let linear w x = Tensor.matmul_transposed x w
 let ( +^ ) = Tensor.add
 
 (* --- GPT Forward Pass --- *)
+(** GPT forward pass for a single token. *)
 let gpt state tid pid keys values =
   let tok_emb = Tensor.slice_row state.wte tid in
   let pos_emb = Tensor.slice_row state.wpe pid in
@@ -509,8 +525,7 @@ let gpt state tid pid keys values =
   apply_layers x 0 |> linear state.lm_head
 
 (* --- Main Execution --- *)
-
-(** main: Initializes model, runs training loop, and performs inference. *)
+(** Train the model and perform inference. *)
 let main () =
   Printf.printf "num docs: %d\n" (Array.length docs);
   Printf.printf "vocab size: %d\n" vocab_size;
