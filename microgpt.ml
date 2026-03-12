@@ -230,6 +230,40 @@ let gpt state token_id pos_id keys values =
   apply_layers x 0
     |> linear state.lm_head
 
+(* --- Model Utilities --- *)
+
+let rec zip_loss state keys values pos_id = function
+  | t1 :: t2 :: ts when pos_id < block_size ->
+      let l = cross_entropy (gpt state t1 pos_id keys values) t2 in
+      l :: zip_loss state keys values (pos_id + 1) (t2 :: ts)
+  | _ -> []
+
+let rec generate
+    state temperature keys values
+    pos_id tid acc_tokens =
+  if pos_id >= block_size then acc_tokens
+  else
+    let scaled_logits =
+      Array.map
+        (fun v -> Value.scalar
+          (Value.data v /. temperature))
+        (gpt state tid pos_id keys values)
+    in
+    let probs = softmax scaled_logits in
+    let r = Random.float 1.0 in
+    let rec sample_prob i cum =
+      if i >= vocab_size then bos_token
+      else
+        let cum = cum +. Value.data probs.(i) in
+        if r <= cum then i else sample_prob (i + 1) cum
+    in
+    let next_id = sample_prob 0 0.0 in
+    if next_id = bos_token then acc_tokens
+    else generate
+      state temperature keys values
+      (pos_id + 1) next_id
+      (acc_tokens @ [next_id])
+
 (* --- Optimization Ops --- *)
 
 (* Adam Optimizer Step *)
@@ -335,18 +369,9 @@ let main () =
       let keys = Array.make n_layer [] in
       let values = Array.make n_layer [] in
 
-      let rec zip_loss pos_id = function
-        | t1 :: t2 :: ts when pos_id < block_size ->
-            let l = cross_entropy
-              (gpt state t1 pos_id keys values) t2 in
-            l :: zip_loss (pos_id + 1) (t2 :: ts)
-        | _ -> []
-      in
-
-      let losses = zip_loss 0 tokens in
+      let losses = zip_loss state keys values 0 tokens in
+      let total_loss = losses |> Array.of_list |> sum in
       let number = List.length losses in
-      let total_loss =
-        losses |> Array.of_list |> sum in
   
       let avg_loss =
         total_loss /: Value.scalar
@@ -372,33 +397,8 @@ let main () =
       let keys = Array.make n_layer [] in
       let values = Array.make n_layer [] in
 
-      let rec generate pos_id tid acc_tokens =
-        if pos_id >= block_size then acc_tokens
-        else
-          let scaled_logits =
-            Array.map
-              (fun v -> Value.scalar
-                (Value.data v /. temperature))
-              (gpt state tid pos_id keys values)
-          in
-          let probs = softmax scaled_logits in
-          let r = Random.float 1.0 in
-
-          let rec sample_prob i cum =
-            if i >= vocab_size then bos_token
-            else
-              let cum = cum +. Value.data probs.(i) in
-              if r <= cum then i else sample_prob (i + 1) cum
-          in
-
-          let next_id = sample_prob 0 0.0 in
-          if next_id = bos_token then acc_tokens
-          else generate
-            (pos_id + 1) next_id
-            (acc_tokens @ [next_id])
-      in
-
-      let sample_ids = generate 0 bos_token [] in
+      let sample_ids =
+        generate state temperature keys values 0 bos_token [] in
       let sample_chars = List.map (fun id -> uchars.(id)) sample_ids in
       let sample_str = String.of_seq (List.to_seq sample_chars) in
 
