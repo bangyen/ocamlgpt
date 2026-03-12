@@ -34,7 +34,7 @@ module Tensor = struct
   let entry x r c = get x.data r c
   let set_entry x r c v = set x.data r c v
 
-  let backward root =
+  (** backward: Reverse-mode autodiff: traverse the graph in reverse topological order. *)
     let rec build v topo =
       if v.visited then topo
       else begin
@@ -276,7 +276,7 @@ module Tensor = struct
     let out = create r c in add_into out a b; out
 
 
-  let rmsnorm x =
+  (** rmsnorm: Root Mean Square Layer Normalization. *)
     let r, c = dim1 x.data, dim2 x.data in
     let out = create r c in rmsnorm_into out x; out
 
@@ -509,6 +509,8 @@ let gpt state tid pid keys values =
   apply_layers x 0 |> linear state.lm_head
 
 (* --- Main Execution --- *)
+
+(** main: Initializes model, runs training loop, and performs inference. *)
 let main () =
   Printf.printf "num docs: %d\n" (Array.length docs);
   Printf.printf "vocab size: %d\n" vocab_size;

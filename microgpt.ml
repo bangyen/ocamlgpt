@@ -1,14 +1,13 @@
 (*
    microgpt.ml - A single-file, zero-dependency GPT-2 implementation in OCaml.
+
    Architecture:
    - Autograd: Scalar-valued engine with reverse-mode differentiation.
    - Model: GPT-2 with RMSNorm, Multi-Head Attention, and GELU-like ReLU MLP.
    - Optimizer: Adam with linear learning rate decay.
 *)
 
-(* --- Scalar Autograd Engine ---
-   This module tracks a computation graph of scalar values to compute gradients via reverse-mode AD.
-*)
+(* --- Scalar Autograd Engine --- *)
 module Value = struct
   type t = {
     mutable data     : float;
@@ -38,10 +37,7 @@ module Value = struct
   let div a b = mul a (pow b (-1.0))
   let sub a b = add a (neg b)
 
-  (*
-     Reverse-mode autodiff: traverse the
-     graph in reverse topological order
-  *)
+  (* Reverse-mode autodiff: traverse the graph in reverse topological order *)
   let backward root =
     let rec build v topo =
       if v._visited then topo
@@ -55,10 +51,7 @@ module Value = struct
     let topo = build root [] in
     (* Seed the gradient of the loss with 1.0 *)
     root.grad <- 1.0;
-    (*
-       Propagate gradients to children using
-       the stored chain rule derivatives
-    *)
+    (* Propagate gradients to children using the stored chain rule derivatives *)
     List.iter (fun v ->
       List.iter2 (fun child og ->
         child.grad <-
@@ -73,7 +66,7 @@ module Value = struct
   let set_grad v g = v.grad <- g
 end
 
-(* Operator aliases for convenience *)
+(* --- Operator Aliases --- *)
 let ( +: ), ( -: ) = Value.add, Value.sub
 let ( *: ), ( /: ) = Value.mul, Value.div
 let ( +^ ), ( *^ ) = Array.map2 (+:), Array.map2 ( *:)
@@ -110,7 +103,7 @@ type state = {
   layers  : layer array;
 }
 
-(* --- Global Configuration & Vocabulary --- *)
+(* --- Data Loading & Vocabulary --- *)
 let () = Random.init 42
 
 let docs =
@@ -130,9 +123,9 @@ let uchars =
 let vocab_size = Array.length uchars + 1
 let bos_token = Array.length uchars
 
-(* --- Initialization & Matrix Ops --- *)
+(* --- Initialization & Utils --- *)
 
-(* Box-Muller transform for Gaussian sampling *)
+(** gauss: Box-Muller transform for Gaussian sampling. *)
 let gauss mean std =
   let u1 = Random.float 1.0 in
   let u2 = Random.float 1.0 in
@@ -140,30 +133,33 @@ let gauss mean std =
     *. sqrt (-2.0 *. log u1)
     *. cos (2.0 *. Float.pi *. u2)
 
+(** matrix: Initializes a matrix (2D array) of scalar values with Gaussian weights. *)
 let matrix ?(std = 0.08) rows cols =
   Array.init rows (fun _ ->
     Array.init cols (fun _ -> Value.scalar (gauss 0.0 std))
   )
 
-(* Dot Product: sum(a * b) *)
+(** dot: Dot Product - sum(a * b). *)
 let dot a b = a *^ b |> sum
 
-(* Linear Layer: y = xW^T (Arguments flipped for pipelining) *)
+(** linear: Linear Layer - y = xW^T (Arguments flipped for pipelining). *)
 let linear w x = Array.map (dot x) w
 
-(* Softmax: exp(xi) / sum(exp(xj)) *)
+(** softmax: Normalizes logits into a probability distribution. *)
 let softmax logits =
   let max_val = Array.fold_left (fun m v -> max m (Value.data v)) (-.infinity) logits in
   let exps = Array.map (fun v -> Value.exp (v -: Value.scalar max_val)) logits in
   Array.map (fun e -> e /: sum exps) exps
 
-(* RMSNorm: x / sqrt(mean(x^2) + eps) *)
+(** rmsnorm: Root Mean Square Layer Normalization. *)
 let rmsnorm x =
   let ms    = dot x x /: Value.scalar (float (Array.length x)) in
   let scale = Value.pow (ms +: Value.scalar 1e-5) (-0.5) in
   Array.map (fun xi -> xi *: scale) x
 
 (* --- GPT Forward Pass --- *)
+
+(** gpt: GPT forward pass for a single token at a given position. *)
 let gpt state token_id pos_id keys values =
   let x = state.wte.(token_id)
     +^ state.wpe.(pos_id)
@@ -225,13 +221,14 @@ let gpt state token_id pos_id keys values =
 
 (* --- Model Utilities --- *)
 
-(* Cross-Entropy Loss: -log(p(target)) *)
+(** cross_entropy: Computes negative log likelihood loss. *)
 let cross_entropy logits target_id =
   logits
     |> softmax
     |> fun p -> Value.log p.(target_id)
     |> Value.neg
 
+(** zip_loss: Maps over a sequence of tokens to compute the cross-entropy loss at each step. *)
 let zip_loss state keys values =
   let rec loop pos_id = function
     | t1 :: t2 :: ts when pos_id < block_size ->
@@ -242,7 +239,7 @@ let zip_loss state keys values =
   in
   loop 0
 
-(* Multinomial sampling: picks an index i with probability probs.(i) *)
+(** sample: Picks an index i with probability probs.(i). *)
 let sample probs =
   let r = Random.float 1.0 in
 
@@ -252,18 +249,19 @@ let sample probs =
     then i else loop (i + 1) cum'
   in loop 0 0.0
 
-(* Scale logits by temperature and detach from computation graph *)
+(** scale: Scale logits by temperature and detach from computation graph. *)
 let scale temp logits =
   Array.map (fun v -> Value.scalar
     (Value.data v /. temp)) logits
 
-(* Predict the next token ID given current position and token ID *)
+(** predict: Predict the next token ID given current position and token ID. *)
 let predict state temp keys values pos tid =
   gpt state tid pos keys values
     |> scale temp
     |> softmax
     |> sample
 
+(** generate: Produces a sequence of token IDs using autoregressive sampling. *)
 let generate state temperature keys values =
   let next = predict state temperature keys values in
   (0, bos_token)
@@ -275,9 +273,9 @@ let generate state temperature keys values =
       else None)
   |> List.of_seq
 
-(* --- Optimization Ops --- *)
+(* --- Training Ops --- *)
 
-(* Adam Optimizer Step *)
+(** step_adam: Performs an Adam optimization step. *)
 let step_adam params m v step =
   let lr_t =
     learning_rate *. (1.0 -.
@@ -305,6 +303,8 @@ let step_adam params m v step =
     params
 
 (* --- Main Execution --- *)
+
+(** main: Initializes model, runs training loop, and performs inference. *)
 
 let main () =
   Printf.printf "num docs: %d\n" (Array.length docs);
