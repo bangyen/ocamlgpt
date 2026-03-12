@@ -262,7 +262,9 @@ let generate state temperature keys values =
       in
       let next_id = sample_prob 0 0.0 in
       if next_id = bos_token then acc_tokens
-      else loop (pos_id + 1) next_id (acc_tokens @ [next_id])
+      else loop
+        (pos_id + 1) next_id
+        (acc_tokens @ [next_id])
   in
   loop 0 bos_token []
 
