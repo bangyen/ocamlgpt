@@ -218,8 +218,8 @@ let gpt state token_id pos_id keys values =
       let x = x_attn
         |> linear l.wo
         |> ( +^ ) x in
-      let mlp_out =
-        x |> rmsnorm
+      let mlp_out = x
+        |> rmsnorm
         |> linear l.fc1
         |> Array.map Value.relu
         |> linear l.fc2
@@ -252,19 +252,17 @@ let generate state temperature keys values =
       |> Array.map (fun v -> Value.scalar
         (Value.data v /. temperature))
       |> softmax in
-    let r = Random.float 1.0 in
 
+    let r = Random.float 1.0 in
     let rec sample i cum =
       let cum' = cum +. Value.data probs.(i) in
       if r <= cum' || i = vocab_size - 1
-      then i else sample (i + 1) cum' in
+      then i else sample (i + 1) cum'
+    in
 
-    let next_id = sample 0 0.0 in
-    if next_id = bos_token
-    then List.rev acc
-    else loop
-      (pos_id + 1) next_id
-      (next_id :: acc)
+    match sample 0 0.0 with
+    | next_id when next_id = bos_token -> List.rev acc
+    | next_id -> loop (pos_id + 1) next_id (next_id :: acc)
   in
   loop 0 bos_token []
 
