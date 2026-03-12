@@ -157,13 +157,6 @@ let softmax logits =
   let exps = Array.map (fun v -> Value.exp (v -: Value.scalar max_val)) logits in
   Array.map (fun e -> e /: sum exps) exps
 
-(* Cross-Entropy Loss: -log(p(target)) *)
-let cross_entropy logits target_id =
-  logits
-    |> softmax
-    |> fun p -> Value.log p.(target_id)
-    |> Value.neg
-
 (* RMSNorm: x / sqrt(mean(x^2) + eps) *)
 let rmsnorm x =
   let ms    = dot x x /: Value.scalar (float (Array.length x)) in
@@ -232,6 +225,13 @@ let gpt state token_id pos_id keys values =
 
 (* --- Model Utilities --- *)
 
+(* Cross-Entropy Loss: -log(p(target)) *)
+let cross_entropy logits target_id =
+  logits
+    |> softmax
+    |> fun p -> Value.log p.(target_id)
+    |> Value.neg
+
 let zip_loss state keys values =
   let rec loop pos_id = function
     | t1 :: t2 :: ts when pos_id < block_size ->
@@ -245,27 +245,33 @@ let zip_loss state keys values =
 (* Multinomial sampling: picks an index i with probability probs.(i) *)
 let sample probs =
   let r = Random.float 1.0 in
+
   let rec loop i cum =
     let cum' = cum +. Value.data probs.(i) in
     if r <= cum' || i = Array.length probs - 1
     then i else loop (i + 1) cum'
   in loop 0 0.0
 
+(* Scale logits by temperature and detach from computation graph *)
+let scale temp logits =
+  Array.map (fun v -> Value.scalar
+    (Value.data v /. temp)) logits
+
 let generate state temperature keys values =
-  let rec loop pos tid acc =
-    if pos >= block_size
-    then List.rev acc else
-    let next_id =
-      gpt state tid pos keys values
-      |> Array.map (fun v -> Value.scalar
-        (Value.data v /. temperature))
-      |> softmax
-      |> sample
-    in
-    if next_id = bos_token then List.rev acc
-    else loop (pos + 1) next_id (next_id :: acc)
+  let step (pos, tid) =
+    if pos >= block_size then None
+    else
+      let next_id =
+        gpt state tid pos keys values
+        |> scale temperature
+        |> softmax
+        |> sample in
+      if next_id = bos_token then None
+      else Some (next_id, (pos + 1, next_id))
   in
-  loop 0 bos_token []
+  Seq.unfold step
+    (0, bos_token)
+    |> List.of_seq
 
 (* --- Optimization Ops --- *)
 
