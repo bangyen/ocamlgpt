@@ -257,21 +257,23 @@ let scale temp logits =
   Array.map (fun v -> Value.scalar
     (Value.data v /. temp)) logits
 
+(* Predict the next token ID given current position and token ID *)
+let predict state temp keys values pos tid =
+  gpt state tid pos keys values
+    |> scale temp
+    |> softmax
+    |> sample
+
 let generate state temperature keys values =
-  let step (pos, tid) =
-    if pos >= block_size then None
-    else
-      let next_id =
-        gpt state tid pos keys values
-        |> scale temperature
-        |> softmax
-        |> sample in
-      if next_id = bos_token then None
-      else Some (next_id, (pos + 1, next_id))
-  in
-  Seq.unfold step
-    (0, bos_token)
-    |> List.of_seq
+  let next = predict state temperature keys values in
+  (0, bos_token)
+  |> Seq.unfold (fun (pos, tid) ->
+      if pos < block_size then
+        match next pos tid with
+        | id when id = bos_token -> None
+        | id -> Some (id, (pos + 1, id))
+      else None)
+  |> List.of_seq
 
 (* --- Optimization Ops --- *)
 
